@@ -1,7 +1,7 @@
 `default_nettype none
 
 module mips_core #(
-    parameter RESET_PC = 32'h8010_0000
+    parameter RESET_PC = 32'h8000_0000
 )(
     input  wire        clk,
     input  wire        reset,
@@ -47,15 +47,14 @@ reg [31:0] if_id_inst;
 
 reg        id_ex_valid;
 reg [31:0] id_ex_pc;
-reg [31:0] id_ex_inst;
+reg [5:0]  id_ex_op;
+reg [5:0]  id_ex_func;
 reg [31:0] id_ex_rs_value;
 reg [31:0] id_ex_rt_value;
 reg [4:0]  id_ex_rs;
 reg [4:0]  id_ex_rt;
-reg [4:0]  id_ex_rd;
 reg [4:0]  id_ex_sa;
 reg [15:0] id_ex_imm;
-reg [25:0] id_ex_jidx;
 reg        id_ex_wb_en;
 reg [4:0]  id_ex_wb_addr;
 reg        id_ex_mem_read;
@@ -92,8 +91,8 @@ wire [5:0] id_func  = if_id_inst[5:0];
 wire [15:0] id_imm  = if_id_inst[15:0];
 wire [25:0] id_jidx = if_id_inst[25:0];
 
-wire [5:0] ex_op    = id_ex_inst[31:26];
-wire [5:0] ex_func  = id_ex_inst[5:0];
+wire [5:0] ex_op    = id_ex_op;
+wire [5:0] ex_func  = id_ex_func;
 
 reg id_uses_rs;
 reg id_uses_rt;
@@ -300,15 +299,14 @@ always @(posedge clk) begin
         if_id_inst <= 32'b0;
         id_ex_valid <= 1'b0;
         id_ex_pc <= 32'b0;
-        id_ex_inst <= 32'b0;
+        id_ex_op <= 6'b0;
+        id_ex_func <= 6'b0;
         id_ex_rs_value <= 32'b0;
         id_ex_rt_value <= 32'b0;
         id_ex_rs <= 5'b0;
         id_ex_rt <= 5'b0;
-        id_ex_rd <= 5'b0;
         id_ex_sa <= 5'b0;
         id_ex_imm <= 16'b0;
-        id_ex_jidx <= 26'b0;
         id_ex_wb_en <= 1'b0;
         id_ex_wb_addr <= 5'b0;
         id_ex_mem_read <= 1'b0;
@@ -398,15 +396,14 @@ always @(posedge clk) begin
             end else begin
                 id_ex_valid <= if_id_valid;
                 id_ex_pc <= if_id_pc;
-                id_ex_inst <= if_id_inst;
+                id_ex_op <= id_op;
+                id_ex_func <= id_func;
                 id_ex_rs_value <= id_rs_value;
                 id_ex_rt_value <= id_rt_value;
                 id_ex_rs <= id_rs;
                 id_ex_rt <= id_rt;
-                id_ex_rd <= id_rd;
                 id_ex_sa <= id_sa;
                 id_ex_imm <= id_imm;
-                id_ex_jidx <= id_jidx;
                 id_ex_wb_en <= id_wb_en;
                 id_ex_wb_addr <= id_wb_addr;
                 id_ex_mem_read <= id_mem_read;

@@ -18,7 +18,7 @@ all: $(BINS)
 	$(OBJCOPY) -j .text -O binary $^ $@
 
 %.elf: %.o
-	$(LD) $(LDFLAGS) -Ttext 0x80100000 -o $@ $^
+	$(LD) $(LDFLAGS) -Ttext 0x80000000 -o $@ $^
 
 %.o: %.s
 	$(CC) $(CFLAGS) -x assembler-with-cpp -c -o $@ $^

@@ -10,7 +10,7 @@
 
 namespace {
 
-const uint32_t kResetPc = 0x80100000u;
+const uint32_t kResetPc = 0x80000000u;
 const uint32_t kMemSize = 8u * 1024u * 1024u;
 
 uint32_t phys_addr(uint32_t addr) {
@@ -165,6 +165,31 @@ int main(int argc, char** argv) {
         }
         std::printf("isa-directed check passed\n");
         return 0;
+    }
+
+    if (program.find("lab1") != std::string::npos) {
+        uint32_t a = 1;
+        uint32_t b = 1;
+        bool ok = true;
+        for (unsigned i = 0; i < 64; ++i) {
+            uint32_t next = a + b;
+            a = b;
+            b = next;
+            uint32_t actual = load_word(mem, 0x80400000u + i * 4u);
+            if (i < 8 || i >= 60) {
+                std::printf("lab1 mem[%08x] = %u expected %u\n",
+                            0x80400000u + i * 4u, actual, b);
+            }
+            if (actual != b) {
+                ok = false;
+            }
+        }
+        if (ok) {
+            std::printf("lab1 fibonacci64 check passed\n");
+            return 0;
+        }
+        std::fprintf(stderr, "lab1 fibonacci64 check failed\n");
+        return 1;
     }
 
     const uint32_t expected[] = {2, 3, 5, 8, 13, 21, 34, 55};

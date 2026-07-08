@@ -74,7 +74,7 @@ wire [31:0] debug_wb_rf_wdata;
 wire [31:0] debug_pc;
 
 mips_core #(
-    .RESET_PC(32'h8010_0000)
+    .RESET_PC(32'h8000_0000)
 ) u_cpu (
     .clk(clk),
     .reset(reset),
