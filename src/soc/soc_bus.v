@@ -41,7 +41,7 @@ localparam B_SRAM_WAIT   = 3'd1;
 localparam B_RESP        = 3'd2;
 localparam B_UART_TXWAIT = 3'd3;
 localparam B_UART_START  = 3'd4;
-localparam B_UART_READ   = 3'd5;
+localparam B_UART_WAIT   = 3'd5;
 localparam UART_RX_FIFO_DEPTH = 1024;
 
 reg [2:0] state;
@@ -192,7 +192,8 @@ always @(posedge clk) begin
                             end else begin
                                 cpu_rdata <= {24'b0, uart_status_value};
                             end
-                            state <= B_UART_READ;
+                            wait_count <= 2'd2;
+                            state <= B_UART_WAIT;
                         end
                     end else begin
                         active_ext <= select_ext;
@@ -249,13 +250,17 @@ always @(posedge clk) begin
             B_UART_START: begin
                 if (!uart_tx_busy) begin
                     uart_tx_start <= 1'b1;
+                    wait_count <= 2'd2;
+                    state <= B_UART_WAIT;
+                end
+            end
+            B_UART_WAIT: begin
+                if (wait_count != 2'b0) begin
+                    wait_count <= wait_count - 2'b1;
+                end else begin
                     cpu_ready <= 1'b1;
                     state <= B_RESP;
                 end
-            end
-            B_UART_READ: begin
-                cpu_ready <= 1'b1;
-                state <= B_RESP;
             end
             B_RESP: begin
                 base_drive <= 1'b0;
