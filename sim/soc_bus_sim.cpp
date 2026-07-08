@@ -12,6 +12,16 @@ void tick(Vsoc_bus& dut) {
     dut.eval();
 }
 
+bool wait_ready(Vsoc_bus& dut, int max_cycles) {
+    for (int i = 0; i < max_cycles; ++i) {
+        tick(dut);
+        if (dut.cpu_ready) {
+            return true;
+        }
+    }
+    return false;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -39,13 +49,13 @@ int main(int argc, char** argv) {
     dut.cpu_write = 0;
     dut.cpu_size = 0;
     dut.cpu_addr = 0xbfd003fc;
-    tick(dut);
+    bool ready = wait_ready(dut, 8);
 
     unsigned status = dut.cpu_rdata & 0x3u;
     std::printf("uart status = 0x%x\n", status);
-    if (!dut.cpu_ready || status != 0x1u) {
+    if (!ready || status != 0x1u) {
         std::fprintf(stderr, "uart status check failed: ready=%u status=0x%x\n",
-                     dut.cpu_ready, status);
+                     ready, status);
         return 1;
     }
 

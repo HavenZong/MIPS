@@ -41,6 +41,7 @@ localparam B_SRAM_WAIT   = 3'd1;
 localparam B_RESP        = 3'd2;
 localparam B_UART_TXWAIT = 3'd3;
 localparam B_UART_START  = 3'd4;
+localparam B_UART_READ   = 3'd5;
 localparam UART_RX_FIFO_DEPTH = 1024;
 
 reg [2:0] state;
@@ -99,6 +100,7 @@ wire is_uart_status = (cpu_addr == UART_STATUS_ADDR);
 wire is_uart = is_uart_data || is_uart_status;
 wire uart_rx_fifo_empty = (uart_rx_count == 11'd0);
 wire uart_rx_fifo_full = (uart_rx_count == 11'd1024);
+wire [7:0] uart_status_value = {6'b0, !uart_rx_fifo_empty, !uart_tx_busy};
 wire uart_rx_pop = (state == B_IDLE) && cpu_valid && !cpu_write && is_uart_data && !uart_rx_fifo_empty;
 wire uart_rx_push = uart_rx_ready && (!uart_rx_fifo_full || uart_rx_pop);
 
@@ -188,10 +190,9 @@ always @(posedge clk) begin
                             if (is_uart_data) begin
                                 cpu_rdata <= {24'b0, uart_rx_fifo_empty ? 8'b0 : uart_rx_fifo[uart_rx_head]};
                             end else begin
-                                cpu_rdata <= {30'b0, !uart_rx_fifo_empty, !uart_tx_busy};
+                                cpu_rdata <= {24'b0, uart_status_value};
                             end
-                            cpu_ready <= 1'b1;
-                            state <= B_RESP;
+                            state <= B_UART_READ;
                         end
                     end else begin
                         active_ext <= select_ext;
@@ -251,6 +252,10 @@ always @(posedge clk) begin
                     cpu_ready <= 1'b1;
                     state <= B_RESP;
                 end
+            end
+            B_UART_READ: begin
+                cpu_ready <= 1'b1;
+                state <= B_RESP;
             end
             B_RESP: begin
                 base_drive <= 1'b0;
