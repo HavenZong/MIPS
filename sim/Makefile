@@ -1,5 +1,7 @@
 VERILATOR ?= verilator
 CXXFLAGS += -std=c++11 -O2
+KERNEL_C3_BIN ?= /home/luoshuang/下载/kernel.bin
+KERNEL_PERF_BIN ?= /home/luoshuang/下载/kernel (1).bin
 
 CORE_TOP = mips_core
 CORE_EXE = obj_dir/V$(CORE_TOP)
@@ -9,7 +11,7 @@ SYSTEM_TOP = soc_system_tb
 SYSTEM_EXE = obj_dir/V$(SYSTEM_TOP)
 SYSTEM_REAL_UART_EXE = obj_dir/V$(SYSTEM_TOP)_real_uart
 
-.PHONY: all core-sample isa-directed lab1 kernel-c3 soc-bus soc-system soc-system-real-uart clean
+.PHONY: all core-sample isa-directed lab1 kernel-c3 kernel-perf soc-bus soc-system soc-system-perf soc-system-real-uart clean
 
 all: core-sample isa-directed lab1 soc-bus
 
@@ -45,17 +47,24 @@ lab1: $(CORE_EXE) ../asm/lab1.bin
 	TRACE=$(TRACE) $(CORE_EXE) ../asm/lab1.bin
 
 kernel-c3: $(CORE_EXE) ../asm/c3-user.bin
-	TRACE=$(TRACE) $(CORE_EXE) /home/luoshuang/下载/kernel.bin ../asm/c3-user.bin
+	TRACE=$(TRACE) $(CORE_EXE) "$(KERNEL_C3_BIN)" ../asm/c3-user.bin
+
+kernel-perf: $(CORE_EXE) ../asm/c3-user.bin
+	TRACE=$(TRACE) $(CORE_EXE) "$(KERNEL_PERF_BIN)" ../asm/c3-user.bin
 
 soc-bus: $(BUS_EXE)
 	$(BUS_EXE)
 
 soc-system: $(SYSTEM_EXE)
-	od -An -tx4 -v /home/luoshuang/下载/kernel.bin > /tmp/kernel_mips.hex
+	od -An -tx4 -v "$(KERNEL_C3_BIN)" > /tmp/kernel_mips.hex
+	$(SYSTEM_EXE)
+
+soc-system-perf: $(SYSTEM_EXE)
+	od -An -tx4 -v "$(KERNEL_PERF_BIN)" > /tmp/kernel_mips.hex
 	$(SYSTEM_EXE)
 
 soc-system-real-uart: $(SYSTEM_REAL_UART_EXE)
-	od -An -tx4 -v /home/luoshuang/下载/kernel.bin > /tmp/kernel_mips.hex
+	od -An -tx4 -v "$(KERNEL_C3_BIN)" > /tmp/kernel_mips.hex
 	$(SYSTEM_REAL_UART_EXE)
 
 clean:
