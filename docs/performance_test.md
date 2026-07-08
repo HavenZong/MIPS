@@ -72,7 +72,7 @@ funct  = 000010
 
 ```text
 /home/luoshuang/下载/kernel.bin
-/home/luoshuang/下载/supervisor_mips (1).zip
+/home/luoshuang/下载/supervisor_mips.zip
 ```
 
 重复下载得到的另一个 Kernel 文件与 `kernel.bin` 内容完全一致，大小均为 12852 字节，SHA256 均为：
@@ -81,9 +81,15 @@ funct  = 000010
 05d4a1f5d57839a5aeedc1457a61759cb8e0e915e2f3d50d9c5c1a3fd9767e87
 ```
 
+重复下载得到的另一个监控程序源码包与 `supervisor_mips.zip` 内容完全一致，大小均为 131655 字节，SHA256 均为：
+
+```text
+9a35afaf1ae910fe25c41c2fc5a80e74c81dc41f27589a8efda91c44828272e4
+```
+
 ## Kernel 内置高负载程序
 
-`supervisor_mips (1).zip` 中的 `kernel/kern/test.S` 包含以下内置测试入口：
+`supervisor_mips.zip` 中的 `kernel/kern/test.S` 包含以下内置测试入口：
 
 | 符号 | 地址 | 说明 |
 | --- | --- | --- |
