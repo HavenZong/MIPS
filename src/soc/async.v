@@ -13,6 +13,7 @@
 
 module async_transmitter(
 	input wire clk,
+	input wire reset,
 	input wire TxD_start,
 	input wire [7:0] TxD_data,
 	output wire TxD,
@@ -44,27 +45,32 @@ assign TxD_busy = ~TxD_ready;
 reg [7:0] TxD_shift = 0;
 always @(posedge clk)
 begin
-	if(TxD_ready & TxD_start)
-		TxD_shift <= TxD_data;
-	else
-	if(TxD_state[3] & BitTick)
-		TxD_shift <= (TxD_shift >> 1);
+	if(reset) begin
+		TxD_state <= 4'b0000;
+		TxD_shift <= 8'b0;
+	end else begin
+		if(TxD_ready & TxD_start)
+			TxD_shift <= TxD_data;
+		else
+		if(TxD_state[3] & BitTick)
+			TxD_shift <= (TxD_shift >> 1);
 
-	case(TxD_state)
-		4'b0000: if(TxD_start) TxD_state <= 4'b0100;
-		4'b0100: if(BitTick) TxD_state <= 4'b1000;  // start bit
-		4'b1000: if(BitTick) TxD_state <= 4'b1001;  // bit 0
-		4'b1001: if(BitTick) TxD_state <= 4'b1010;  // bit 1
-		4'b1010: if(BitTick) TxD_state <= 4'b1011;  // bit 2
-		4'b1011: if(BitTick) TxD_state <= 4'b1100;  // bit 3
-		4'b1100: if(BitTick) TxD_state <= 4'b1101;  // bit 4
-		4'b1101: if(BitTick) TxD_state <= 4'b1110;  // bit 5
-		4'b1110: if(BitTick) TxD_state <= 4'b1111;  // bit 6
-		4'b1111: if(BitTick) TxD_state <= 4'b0010;  // bit 7
-		4'b0010: if(BitTick) TxD_state <= 4'b0000;  // stop1
-		//4'b0011: if(BitTick) TxD_state <= 4'b0000;  // stop2
-		default: if(BitTick) TxD_state <= 4'b0000;
-	endcase
+		case(TxD_state)
+			4'b0000: if(TxD_start) TxD_state <= 4'b0100;
+			4'b0100: if(BitTick) TxD_state <= 4'b1000;  // start bit
+			4'b1000: if(BitTick) TxD_state <= 4'b1001;  // bit 0
+			4'b1001: if(BitTick) TxD_state <= 4'b1010;  // bit 1
+			4'b1010: if(BitTick) TxD_state <= 4'b1011;  // bit 2
+			4'b1011: if(BitTick) TxD_state <= 4'b1100;  // bit 3
+			4'b1100: if(BitTick) TxD_state <= 4'b1101;  // bit 4
+			4'b1101: if(BitTick) TxD_state <= 4'b1110;  // bit 5
+			4'b1110: if(BitTick) TxD_state <= 4'b1111;  // bit 6
+			4'b1111: if(BitTick) TxD_state <= 4'b0010;  // bit 7
+			4'b0010: if(BitTick) TxD_state <= 4'b0000;  // stop1
+			//4'b0011: if(BitTick) TxD_state <= 4'b0000;  // stop2
+			default: if(BitTick) TxD_state <= 4'b0000;
+		endcase
+	end
 end
 
 assign TxD = (TxD_state<4) | (TxD_state[3] & TxD_shift[0]);  // put together the start, data and stop bits
@@ -74,6 +80,7 @@ endmodule
 ////////////////////////////////////////////////////////
 module async_receiver(
 	input wire clk,
+	input wire reset,
 	input wire RxD,
 	output reg RxD_data_ready,
 	input wire RxD_clear,
@@ -141,28 +148,35 @@ wire sampleNow = OversamplingTick && (OversamplingCnt==Oversampling/2-1);
 
 // now we can accumulate the RxD bits in a shift-register
 always @(posedge clk)
-case(RxD_state)
-	4'b0000: if(~RxD_bit) RxD_state <= `ifdef SIMULATION 4'b1000 `else 4'b0001 `endif;  // start bit found?
-	4'b0001: if(sampleNow) RxD_state <= 4'b1000;  // sync start bit to sampleNow
-	4'b1000: if(sampleNow) RxD_state <= 4'b1001;  // bit 0
-	4'b1001: if(sampleNow) RxD_state <= 4'b1010;  // bit 1
-	4'b1010: if(sampleNow) RxD_state <= 4'b1011;  // bit 2
-	4'b1011: if(sampleNow) RxD_state <= 4'b1100;  // bit 3
-	4'b1100: if(sampleNow) RxD_state <= 4'b1101;  // bit 4
-	4'b1101: if(sampleNow) RxD_state <= 4'b1110;  // bit 5
-	4'b1110: if(sampleNow) RxD_state <= 4'b1111;  // bit 6
-	4'b1111: if(sampleNow) RxD_state <= 4'b0010;  // bit 7
-	4'b0010: if(sampleNow) RxD_state <= 4'b0000;  // stop bit
-	default: RxD_state <= 4'b0000;
-endcase
+if(reset)
+	RxD_state <= 4'b0000;
+else
+	case(RxD_state)
+		4'b0000: if(~RxD_bit) RxD_state <= `ifdef SIMULATION 4'b1000 `else 4'b0001 `endif;  // start bit found?
+		4'b0001: if(sampleNow) RxD_state <= 4'b1000;  // sync start bit to sampleNow
+		4'b1000: if(sampleNow) RxD_state <= 4'b1001;  // bit 0
+		4'b1001: if(sampleNow) RxD_state <= 4'b1010;  // bit 1
+		4'b1010: if(sampleNow) RxD_state <= 4'b1011;  // bit 2
+		4'b1011: if(sampleNow) RxD_state <= 4'b1100;  // bit 3
+		4'b1100: if(sampleNow) RxD_state <= 4'b1101;  // bit 4
+		4'b1101: if(sampleNow) RxD_state <= 4'b1110;  // bit 5
+		4'b1110: if(sampleNow) RxD_state <= 4'b1111;  // bit 6
+		4'b1111: if(sampleNow) RxD_state <= 4'b0010;  // bit 7
+		4'b0010: if(sampleNow) RxD_state <= 4'b0000;  // stop bit
+		default: RxD_state <= 4'b0000;
+	endcase
 
 always @(posedge clk)
-if(sampleNow && RxD_state[3]) RxD_data <= {RxD_bit, RxD_data[7:1]};
+if(reset)
+	RxD_data <= 8'b0;
+else if(sampleNow && RxD_state[3]) RxD_data <= {RxD_bit, RxD_data[7:1]};
 
 //reg RxD_data_error = 0;
 always @(posedge clk)
 begin
-	if(RxD_clear)
+	if(reset)
+		RxD_data_ready <= 0;
+	else if(RxD_clear)
 		RxD_data_ready <= 0;
 	else
 		RxD_data_ready <= RxD_data_ready | (sampleNow && RxD_state==4'b0010 && RxD_bit);  // make sure a stop bit is received

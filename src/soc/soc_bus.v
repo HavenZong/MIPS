@@ -40,6 +40,7 @@ localparam B_IDLE        = 3'd0;
 localparam B_SRAM_WAIT   = 3'd1;
 localparam B_RESP        = 3'd2;
 localparam B_UART_TXWAIT = 3'd3;
+localparam B_UART_START  = 3'd4;
 localparam UART_RX_FIFO_DEPTH = 1024;
 
 reg [2:0] state;
@@ -72,6 +73,7 @@ async_receiver #(
     .Baud(UART_BAUD)
 ) uart_rx (
     .clk(clk),
+    .reset(reset),
     .RxD(rxd),
     .RxD_data_ready(uart_rx_ready),
     .RxD_clear(uart_rx_clear),
@@ -83,6 +85,7 @@ async_transmitter #(
     .Baud(UART_BAUD)
 ) uart_tx (
     .clk(clk),
+    .reset(reset),
     .TxD(txd),
     .TxD_busy(uart_tx_busy),
     .TxD_start(uart_tx_start),
@@ -179,9 +182,7 @@ always @(posedge clk) begin
                                 state <= B_UART_TXWAIT;
                             end else begin
                                 uart_tx_data <= cpu_wdata[7:0];
-                                uart_tx_start <= 1'b1;
-                                cpu_ready <= 1'b1;
-                                state <= B_RESP;
+                                state <= B_UART_START;
                             end
                         end else begin
                             if (is_uart_data) begin
@@ -241,6 +242,11 @@ always @(posedge clk) begin
             B_UART_TXWAIT: begin
                 if (!uart_tx_busy) begin
                     uart_tx_data <= cpu_wdata[7:0];
+                    state <= B_UART_START;
+                end
+            end
+            B_UART_START: begin
+                if (!uart_tx_busy) begin
                     uart_tx_start <= 1'b1;
                     cpu_ready <= 1'b1;
                     state <= B_RESP;
