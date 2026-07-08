@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <deque>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -17,6 +18,8 @@ const uint32_t kUartDataAddr = 0xbfd003f8u;
 const uint32_t kUartStatusAddr = 0xbfd003fcu;
 const uint32_t kUserBase = 0x80100000u;
 const uint32_t kUserDataBase = 0x80400000u;
+const char kMatrixInPath[] = "/tmp/matrix.in";
+const char kMatrixOutPath[] = "/tmp/matrix.out";
 const char kMonitorWelcome[] = "MONITOR for MIPS32 - initialized.";
 
 uint32_t phys_addr(uint32_t addr) {
@@ -65,6 +68,38 @@ std::vector<uint8_t> read_file(const std::string& path) {
     }
     return std::vector<uint8_t>((std::istreambuf_iterator<char>(file)),
                                 std::istreambuf_iterator<char>());
+}
+
+std::vector<uint32_t> read_hex_words(const std::string& path) {
+    std::ifstream file(path.c_str());
+    if (!file) {
+        std::fprintf(stderr, "failed to open %s\n", path.c_str());
+        std::exit(2);
+    }
+    std::vector<uint32_t> words;
+    std::string line;
+    while (std::getline(file, line)) {
+        if (line.empty()) {
+            continue;
+        }
+        uint32_t value = 0;
+        std::stringstream ss;
+        ss << std::hex << line;
+        ss >> value;
+        if (!ss) {
+            std::fprintf(stderr, "invalid hex word in %s: %s\n", path.c_str(), line.c_str());
+            std::exit(2);
+        }
+        words.push_back(value);
+    }
+    return words;
+}
+
+void load_hex_words(std::vector<uint8_t>& mem, const std::string& path, uint32_t addr) {
+    std::vector<uint32_t> words = read_hex_words(path);
+    for (size_t i = 0; i < words.size(); ++i) {
+        store_word(mem, addr + static_cast<uint32_t>(i * 4u), words[i]);
+    }
 }
 
 void append_u32_le(std::deque<uint8_t>& data, uint32_t value) {
@@ -117,6 +152,11 @@ int main(int argc, char** argv) {
 
     std::vector<uint8_t> mem(kMemSize, 0);
     load_bin(mem, argv[1], kResetPc);
+    std::string program(argv[1]);
+    bool perf_matrix_mode = program.find("perf-matrix") != std::string::npos;
+    if (perf_matrix_mode) {
+        load_hex_words(mem, kMatrixInPath, kUserDataBase);
+    }
 
     Vmips_core dut;
     const char* trace_env = std::getenv("TRACE");
@@ -144,7 +184,9 @@ int main(int argc, char** argv) {
     uint32_t last_wb_pc = 0xffffffffu;
     int same_pc_count = 0;
 
-    uint64_t max_cycles = kernel_c3_mode ? 20000000ull : 20000ull;
+    uint64_t max_cycles = kernel_c3_mode ? 20000000ull :
+                          perf_matrix_mode ? 100000000ull :
+                          20000ull;
     for (uint64_t cycle = 0; cycle < max_cycles; ++cycle) {
         dut.bus_ready = ready_next ? 1 : 0;
         dut.bus_rdata = rdata_next;
@@ -303,7 +345,6 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    std::string program(argv[1]);
     if (program.find("isa-directed") != std::string::npos) {
         uint32_t fail_count = load_word(mem, 0x80400100u);
         std::printf("isa-directed fail_count = %u\n", fail_count);
@@ -337,6 +378,30 @@ int main(int argc, char** argv) {
             return 0;
         }
         std::fprintf(stderr, "lab1 fibonacci64 check failed\n");
+        return 1;
+    }
+
+    if (perf_matrix_mode) {
+        std::vector<uint32_t> expected = read_hex_words(kMatrixOutPath);
+        const uint32_t kMatrixCBase = 0x80420000u;
+        bool ok = true;
+        for (size_t i = 0; i < expected.size(); ++i) {
+            uint32_t actual = load_word(mem, kMatrixCBase + static_cast<uint32_t>(i * 4u));
+            if (actual != expected[i]) {
+                std::fprintf(stderr,
+                             "perf-matrix mismatch at word %zu addr=%08x actual=%08x expected=%08x\n",
+                             i,
+                             kMatrixCBase + static_cast<uint32_t>(i * 4u),
+                             actual,
+                             expected[i]);
+                ok = false;
+                break;
+            }
+        }
+        if (ok) {
+            std::printf("perf-matrix data check passed\n");
+            return 0;
+        }
         return 1;
     }
 

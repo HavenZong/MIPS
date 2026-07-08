@@ -122,6 +122,14 @@ addiu $t8, $zero, -21
 beq   $t7, $t8, mul_ok
 ```
 
+MATRIX 高负载数据回归：
+
+```sh
+make -C sim perf-matrix
+```
+
+该目标会从 `supervisor_mips.zip` 中提取 `matrix.in` 和 `matrix.out`，将输入矩阵加载到 `0x80400000`，执行与远程日志相同的 MATRIX 程序，并比较 `0x80420000` 开始的 C 矩阵输出。
+
 使用性能测试包的 Kernel 跑监控程序交互回归：
 
 ```sh

@@ -44,9 +44,11 @@ localparam B_UART_START  = 3'd4;
 localparam B_UART_DUMMY  = 3'd5;
 localparam UART_RX_FIFO_DEPTH = 1024;
 localparam [19:0] UART_DUMMY_BASE = 20'hf8000; // ExtRAM byte offset 0x003e0000.
+localparam [2:0] SRAM_WAIT_CYCLES = 3'd4;
+localparam [2:0] UART_DUMMY_WAIT_CYCLES = 3'd2;
 
 reg [2:0] state;
-reg [1:0] wait_count;
+reg [2:0] wait_count;
 reg active_ext;
 reg active_write;
 
@@ -125,7 +127,7 @@ end
 always @(posedge clk) begin
     if (reset) begin
         state <= B_IDLE;
-        wait_count <= 2'b0;
+        wait_count <= 3'b0;
         cpu_rdata <= 32'b0;
         cpu_ready <= 1'b0;
         base_ram_addr <= 20'b0;
@@ -203,14 +205,14 @@ always @(posedge clk) begin
                             ext_ram_oe_n <= 1'b1;
                             ext_ram_we_n <= 1'b0;
                             ext_drive <= 1'b1;
-                            wait_count <= 2'd2;
+                            wait_count <= UART_DUMMY_WAIT_CYCLES;
                             uart_dummy_count <= uart_dummy_count + 8'd1;
                             state <= B_UART_DUMMY;
                         end
                     end else begin
                         active_ext <= select_ext;
                         active_write <= cpu_write;
-                        wait_count <= 2'd2;
+                        wait_count <= SRAM_WAIT_CYCLES;
 
                         if (select_ext) begin
                             ext_ram_addr <= ram_word_addr;
@@ -234,8 +236,8 @@ always @(posedge clk) begin
                 end
             end
             B_SRAM_WAIT: begin
-                if (wait_count != 2'b0) begin
-                    wait_count <= wait_count - 2'b1;
+                if (wait_count != 3'b0) begin
+                    wait_count <= wait_count - 3'b1;
                 end else begin
                     if (!active_write) begin
                         cpu_rdata <= active_ext ? ext_ram_data : base_ram_data;
@@ -269,14 +271,14 @@ always @(posedge clk) begin
                     ext_ram_we_n <= 1'b0;
                     ext_dout <= {8'h55, uart_dummy_count, 8'h57, uart_tx_data};
                     ext_drive <= 1'b1;
-                    wait_count <= 2'd2;
+                    wait_count <= UART_DUMMY_WAIT_CYCLES;
                     uart_dummy_count <= uart_dummy_count + 8'd1;
                     state <= B_UART_DUMMY;
                 end
             end
             B_UART_DUMMY: begin
-                if (wait_count != 2'b0) begin
-                    wait_count <= wait_count - 2'b1;
+                if (wait_count != 3'b0) begin
+                    wait_count <= wait_count - 3'b1;
                 end else begin
                     ext_ram_ce_n <= 1'b1;
                     ext_ram_we_n <= 1'b1;
