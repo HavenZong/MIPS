@@ -69,8 +69,10 @@ soc-system: $(SYSTEM_EXE)
 	$(SYSTEM_EXE)
 
 soc-system-perf: $(SYSTEM_EXE)
+	unzip -p /home/luoshuang/下载/supervisor_mips.zip supervisor_mips/utility/matrix.in > /tmp/matrix.in
+	unzip -p /home/luoshuang/下载/supervisor_mips.zip supervisor_mips/utility/matrix.out > /tmp/matrix.out
 	od -An -tx4 -v "$(KERNEL_C3_BIN)" > /tmp/kernel_mips.hex
-	$(SYSTEM_EXE)
+	$(SYSTEM_EXE) ../asm/perf-matrix.bin +EXT_HEX=/tmp/matrix.in
 
 soc-system-real-uart: $(SYSTEM_REAL_UART_EXE)
 	od -An -tx4 -v "$(KERNEL_C3_BIN)" > /tmp/kernel_mips.hex

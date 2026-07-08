@@ -14,22 +14,22 @@ module soc_bus #(
     input  wire [1:0]  cpu_size,
     input  wire [31:0] cpu_addr,
     input  wire [31:0] cpu_wdata,
-    output reg  [31:0] cpu_rdata,
-    output reg         cpu_ready,
+    output reg  [31:0] cpu_rdata = 32'b0,
+    output reg         cpu_ready = 1'b0,
 
     inout  wire [31:0] base_ram_data,
-    output reg  [19:0] base_ram_addr,
-    output reg  [3:0]  base_ram_be_n,
-    output reg         base_ram_ce_n,
-    output reg         base_ram_oe_n,
-    output reg         base_ram_we_n,
+    output reg  [19:0] base_ram_addr = 20'b0,
+    output reg  [3:0]  base_ram_be_n = 4'hf,
+    output reg         base_ram_ce_n = 1'b1,
+    output reg         base_ram_oe_n = 1'b1,
+    output reg         base_ram_we_n = 1'b1,
 
     inout  wire [31:0] ext_ram_data,
-    output reg  [19:0] ext_ram_addr,
-    output reg  [3:0]  ext_ram_be_n,
-    output reg         ext_ram_ce_n,
-    output reg         ext_ram_oe_n,
-    output reg         ext_ram_we_n,
+    output reg  [19:0] ext_ram_addr = 20'b0,
+    output reg  [3:0]  ext_ram_be_n = 4'hf,
+    output reg         ext_ram_ce_n = 1'b1,
+    output reg         ext_ram_oe_n = 1'b1,
+    output reg         ext_ram_we_n = 1'b1,
 
     output wire        txd,
     input  wire        rxd
@@ -47,15 +47,15 @@ localparam [19:0] UART_DUMMY_BASE = 20'hf8000; // ExtRAM byte offset 0x003e0000.
 localparam [2:0] SRAM_WAIT_CYCLES = 3'd1;
 localparam [2:0] UART_DUMMY_WAIT_CYCLES = 3'd2;
 
-reg [2:0] state;
-reg [2:0] wait_count;
-reg active_ext;
-reg active_write;
+reg [2:0] state = B_IDLE;
+reg [2:0] wait_count = 3'b0;
+reg active_ext = 1'b0;
+reg active_write = 1'b0;
 
-reg base_drive;
-reg ext_drive;
-reg [31:0] base_dout;
-reg [31:0] ext_dout;
+reg base_drive = 1'b0;
+reg ext_drive = 1'b0;
+reg [31:0] base_dout = 32'b0;
+reg [31:0] ext_dout = 32'b0;
 
 assign base_ram_data = base_drive ? base_dout : 32'bz;
 assign ext_ram_data = ext_drive ? ext_dout : 32'bz;
@@ -64,14 +64,14 @@ wire uart_rx_ready;
 wire uart_rx_clear;
 wire [7:0] uart_rx_data;
 reg [7:0] uart_rx_fifo [0:UART_RX_FIFO_DEPTH-1];
-reg [9:0] uart_rx_head;
-reg [9:0] uart_rx_tail;
-reg [10:0] uart_rx_count;
+reg [9:0] uart_rx_head = 10'b0;
+reg [9:0] uart_rx_tail = 10'b0;
+reg [10:0] uart_rx_count = 11'b0;
 
-reg [7:0] uart_tx_data;
-reg uart_tx_start;
+reg [7:0] uart_tx_data = 8'b0;
+reg uart_tx_start = 1'b0;
 wire uart_tx_busy;
-reg [7:0] uart_dummy_count;
+reg [7:0] uart_dummy_count = 8'b0;
 
 async_receiver #(
     .ClkFrequency(CLK_FREQ),

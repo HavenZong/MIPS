@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -13,6 +14,7 @@ namespace {
 const char kWelcome[] = "MONITOR for MIPS32 - initialized.";
 const uint32_t kUserBase = 0x80100000u;
 const uint32_t kUserDataBase = 0x80400000u;
+const uint32_t kMatrixOutBase = 0x80420000u;
 #ifdef FAST_UART
 const unsigned kTicksPerBit = 1;
 #else
@@ -27,6 +29,27 @@ std::vector<uint8_t> read_file(const char* path) {
     }
     return std::vector<uint8_t>((std::istreambuf_iterator<char>(file)),
                                 std::istreambuf_iterator<char>());
+}
+
+std::vector<uint32_t> read_hex_words(const char* path) {
+    std::ifstream file(path);
+    if (!file) {
+        std::fprintf(stderr, "failed to open %s\n", path);
+        std::exit(2);
+    }
+    std::vector<uint32_t> words;
+    std::string line;
+    while (std::getline(file, line)) {
+        if (line.empty()) {
+            continue;
+        }
+        uint32_t value = 0;
+        std::stringstream ss;
+        ss << std::hex << line;
+        ss >> value;
+        words.push_back(value);
+    }
+    return words;
 }
 
 void append_u32_le(std::vector<uint8_t>* data, uint32_t value) {
@@ -45,6 +68,8 @@ uint32_t bytes_to_u32_le(const std::string& data, size_t offset) {
 
 class UartTxDecoder {
 public:
+    UartTxDecoder() : trace_(std::getenv("UART_TRACE") != nullptr) {}
+
     void sample(int txd) {
         if (receiving_) {
             if (countdown_ != 0) {
@@ -59,8 +84,10 @@ public:
                     countdown_ = kTicksPerBit;
                 } else {
                     out.push_back(static_cast<char>(value_ & 0xffu));
-                    std::printf("uart char %02x '%c'\n", value_ & 0xffu,
-                                (value_ >= 32 && value_ <= 126) ? static_cast<char>(value_) : '.');
+                    if (trace_) {
+                        std::printf("uart char %02x '%c'\n", value_ & 0xffu,
+                                    (value_ >= 32 && value_ <= 126) ? static_cast<char>(value_) : '.');
+                    }
                     receiving_ = false;
                 }
             }
@@ -76,6 +103,7 @@ public:
     std::string out;
 
 private:
+    bool trace_ = false;
     int prev_txd_ = 1;
     bool receiving_ = false;
     unsigned countdown_ = 0;
@@ -175,8 +203,8 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-#ifndef FAST_UART
-    std::vector<uint8_t> c3_user = read_file("../asm/c3-user.bin");
+    std::vector<uint8_t> c3_user = read_file(argc >= 2 ? argv[1] : "../asm/c3-user.bin");
+    bool perf_matrix = argc >= 2 && std::string(argv[1]).find("perf-matrix") != std::string::npos;
     std::vector<uint8_t> script;
     script.push_back('A');
     append_u32_le(&script, kUserBase);
@@ -187,35 +215,70 @@ int main(int argc, char** argv) {
     append_u32_le(&script, static_cast<uint32_t>(c3_user.size()));
     script.push_back('G');
     append_u32_le(&script, kUserBase);
-    script.push_back('R');
+
+    if (!perf_matrix) {
+        script.push_back('R');
+    }
     script.push_back('D');
-    append_u32_le(&script, kUserDataBase);
-    append_u32_le(&script, 4);
+    append_u32_le(&script, perf_matrix ? kMatrixOutBase : kUserDataBase);
+    append_u32_le(&script, perf_matrix ? 147456u : 4u);
 
     for (size_t i = 0; i < script.size(); ++i) {
         send_uart_byte(dut, &decoder, script[i]);
     }
 
     const size_t welcome_len = sizeof(kWelcome) - 1u;
-    const size_t expected_response_len = c3_user.size() + 2u + 120u + 4u;
+    const size_t expected_response_len = c3_user.size() + 2u + (perf_matrix ? 0u : 120u) +
+                                         (perf_matrix ? 147456u : 4u);
     for (unsigned cycle = 0;
-         cycle < 40000000 && decoder.out.size() < welcome_len + expected_response_len;
+         cycle < 200000000 && decoder.out.size() < welcome_len + expected_response_len;
          ++cycle) {
         tick(dut, &decoder);
     }
 
     std::string response = decoder.out.substr(welcome_len);
-    if (!check_kernel_response(response, c3_user)) {
+    if (perf_matrix) {
+        if (response.size() < expected_response_len) {
+            std::fprintf(stderr, "perf response too short, pc=%08x response_len=%zu expected=%zu\n",
+                         dut->debug_pc, response.size(), expected_response_len);
+            return 1;
+        }
+        std::vector<uint32_t> expected = read_hex_words("/tmp/matrix.out");
+        for (size_t i = 0; i < c3_user.size(); ++i) {
+            if (static_cast<uint8_t>(response[i]) != c3_user[i]) {
+                std::fprintf(stderr, "perf D command mismatch at byte %zu actual=%02x expected=%02x\n",
+                             i,
+                             static_cast<uint8_t>(response[i]),
+                             c3_user[i]);
+                return 1;
+            }
+        }
+        if (static_cast<uint8_t>(response[c3_user.size()]) != 0x06 ||
+            static_cast<uint8_t>(response[c3_user.size() + 1u]) != 0x07) {
+            std::fprintf(stderr, "perf G markers mismatch: %02x %02x\n",
+                         static_cast<uint8_t>(response[c3_user.size()]),
+                         static_cast<uint8_t>(response[c3_user.size() + 1u]));
+            return 1;
+        }
+        size_t off = c3_user.size() + 2u;
+        for (size_t i = 0; i < expected.size(); ++i) {
+            uint32_t actual = bytes_to_u32_le(response, off + i * 4u);
+            if (actual != expected[i]) {
+                std::fprintf(stderr,
+                             "soc-system-perf mismatch word %zu actual=%08x expected=%08x\n",
+                             i, actual, expected[i]);
+                return 1;
+            }
+        }
+        std::printf("soc-system-perf matrix check passed\n");
+    } else if (!check_kernel_response(response, c3_user)) {
         std::fprintf(stderr, "kernel response check failed, pc=%08x response_len=%zu\n",
                      dut->debug_pc, response.size());
         return 1;
     }
-#endif
 
     std::printf("soc-system kernel welcome check passed\n");
-#ifndef FAST_UART
     std::printf("soc-system real UART command check passed\n");
-#endif
     delete dut;
     return 0;
 }

@@ -191,6 +191,10 @@ int main(int argc, char** argv) {
     bool c3_script_loaded = false;
     bool c3_pass = false;
     bool matrix_pass = false;
+    const char* trace_matrix_env = std::getenv("TRACE_MATRIX");
+    bool trace_matrix = trace_matrix_env != nullptr && trace_matrix_env[0] != '\0' &&
+                        std::string(trace_matrix_env) != "0";
+    unsigned traced_matrix_writes = 0;
 
     for (int i = 0; i < 5; ++i) {
         tick(dut);
@@ -259,6 +263,16 @@ int main(int argc, char** argv) {
                     rdata_next = 0;
                 }
             } else if (pending.write) {
+                if (trace_matrix && pending.addr >= kMatrixOutBase &&
+                    pending.addr < kMatrixOutBase + 256u && traced_matrix_writes < 64u) {
+                    std::printf("matrix write cycle=%llu addr=%08x size=%u data=%08x pcnext=%08x\n",
+                                static_cast<unsigned long long>(cycle),
+                                pending.addr,
+                                pending.size,
+                                pending.wdata,
+                                dut.debug_pc);
+                    ++traced_matrix_writes;
+                }
                 if (pending.size == 0) {
                     store_byte(mem, pending.addr, pending.wdata);
                 } else {

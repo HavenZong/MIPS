@@ -6,18 +6,18 @@ module mips_core #(
     input  wire        clk,
     input  wire        reset,
 
-    output reg         bus_valid,
-    output reg         bus_write,
-    output reg  [1:0]  bus_size,
-    output reg  [31:0] bus_addr,
-    output reg  [31:0] bus_wdata,
+    output reg         bus_valid = 1'b0,
+    output reg         bus_write = 1'b0,
+    output reg  [1:0]  bus_size = 2'b10,
+    output reg  [31:0] bus_addr = 32'b0,
+    output reg  [31:0] bus_wdata = 32'b0,
     input  wire [31:0] bus_rdata,
     input  wire        bus_ready,
 
-    output reg  [31:0] debug_wb_pc,
-    output reg  [3:0]  debug_wb_rf_wen,
-    output reg  [4:0]  debug_wb_rf_wnum,
-    output reg  [31:0] debug_wb_rf_wdata,
+    output reg  [31:0] debug_wb_pc = 32'b0,
+    output reg  [3:0]  debug_wb_rf_wen = 4'b0,
+    output reg  [4:0]  debug_wb_rf_wnum = 5'b0,
+    output reg  [31:0] debug_wb_rf_wdata = 32'b0,
     output wire [31:0] debug_pc
 );
 
@@ -36,6 +36,9 @@ reg [31:0] fetch_pc;
 reg        fetch_buf_valid;
 reg [31:0] fetch_buf_pc;
 reg [31:0] fetch_buf_inst;
+reg        fetch_spill_valid;
+reg [31:0] fetch_spill_pc;
+reg [31:0] fetch_spill_inst;
 
 reg        redirect_pending;
 reg [31:0] redirect_target;
@@ -137,6 +140,7 @@ wire load_use_hazard =
     if_id_valid && id_ex_valid && id_ex_mem_read && id_ex_wb_addr != 5'b0 &&
     ((id_uses_rs && id_rs == id_ex_wb_addr) || (id_uses_rt && id_rt == id_ex_wb_addr));
 
+wire fetch_response_now = bus_valid && bus_ready && bus_owner == BUS_IF;
 wire front_stall = mem_stall || load_use_hazard;
 wire id_advance = if_id_valid && !front_stall;
 wire if_id_can_accept = !front_stall && (!if_id_valid || id_advance);
@@ -146,7 +150,8 @@ wire fetch_buf_take = fetch_buf_valid && if_id_can_accept &&
                       (!redirect_pending || fetch_buf_pc == redirect_delay_pc) &&
                       (!control_taken_now || fetch_buf_pc == control_delay_pc_now);
 wire bus_free_after_ready = !bus_valid || bus_ready;
-wire can_issue_fetch = bus_free_after_ready && !fetch_buf_valid && !mem_stage_needs_bus &&
+wire can_issue_fetch = bus_free_after_ready && !fetch_response_now &&
+                       !fetch_buf_valid && !fetch_spill_valid && !mem_stage_needs_bus &&
                        if_id_can_accept && (!redirect_pending || fetch_pc == redirect_delay_pc) &&
                        (!control_taken_now || fetch_pc == control_delay_pc_now);
 
@@ -301,6 +306,9 @@ always @(posedge clk) begin
         fetch_buf_valid <= 1'b0;
         fetch_buf_pc <= 32'b0;
         fetch_buf_inst <= 32'b0;
+        fetch_spill_valid <= 1'b0;
+        fetch_spill_pc <= 32'b0;
+        fetch_spill_inst <= 32'b0;
         redirect_pending <= 1'b0;
         redirect_target <= 32'b0;
         redirect_delay_pc <= 32'b0;
@@ -361,9 +369,15 @@ always @(posedge clk) begin
         if (bus_valid && bus_ready) begin
             if (bus_owner == BUS_IF) begin
                 if (!redirect_pending || if_req_pc == redirect_delay_pc) begin
-                    fetch_buf_valid <= 1'b1;
-                    fetch_buf_pc <= if_req_pc;
-                    fetch_buf_inst <= bus_rdata;
+                    if (fetch_buf_valid && !fetch_buf_take) begin
+                        fetch_spill_valid <= 1'b1;
+                        fetch_spill_pc <= if_req_pc;
+                        fetch_spill_inst <= bus_rdata;
+                    end else begin
+                        fetch_buf_valid <= 1'b1;
+                        fetch_buf_pc <= if_req_pc;
+                        fetch_buf_inst <= bus_rdata;
+                    end
                 end
             end
             bus_valid <= 1'b0;
@@ -426,7 +440,17 @@ always @(posedge clk) begin
                     fetch_pc <= if_id_pc + 32'd4;
                     if ((fetch_buf_valid && fetch_buf_pc != if_id_pc + 32'd4) ||
                         (bus_valid && bus_ready && bus_owner == BUS_IF && if_req_pc != if_id_pc + 32'd4)) begin
-                        fetch_buf_valid <= 1'b0;
+                        if (fetch_spill_valid && fetch_spill_pc == if_id_pc + 32'd4) begin
+                            fetch_buf_valid <= 1'b1;
+                            fetch_buf_pc <= fetch_spill_pc;
+                            fetch_buf_inst <= fetch_spill_inst;
+                            fetch_spill_valid <= 1'b0;
+                        end else begin
+                            fetch_buf_valid <= 1'b0;
+                        end
+                    end
+                    if (fetch_spill_valid && fetch_spill_pc != if_id_pc + 32'd4) begin
+                        fetch_spill_valid <= 1'b0;
                     end
                 end
 
@@ -436,10 +460,18 @@ always @(posedge clk) begin
                     if_id_inst <= fetch_buf_inst;
                     if (redirect_pending || control_taken_now) begin
                         fetch_buf_valid <= 1'b0;
+                        fetch_spill_valid <= 1'b0;
                         fetch_pc <= redirect_pending ? redirect_target : id_branch_target;
                         redirect_pending <= 1'b0;
-                    end else if (!(bus_valid && bus_ready && bus_owner == BUS_IF)) begin
-                        fetch_buf_valid <= 1'b0;
+                    end else if (!fetch_response_now) begin
+                        if (fetch_spill_valid) begin
+                            fetch_buf_valid <= 1'b1;
+                            fetch_buf_pc <= fetch_spill_pc;
+                            fetch_buf_inst <= fetch_spill_inst;
+                            fetch_spill_valid <= 1'b0;
+                        end else begin
+                            fetch_buf_valid <= 1'b0;
+                        end
                     end
                 end else if (if_id_valid) begin
                     if_id_valid <= 1'b0;

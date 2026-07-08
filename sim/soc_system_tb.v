@@ -87,12 +87,16 @@ reg [31:0] base_mem [0:1048575];
 reg [31:0] ext_mem [0:1048575];
 
 integer i;
+reg [1023:0] ext_hex_path;
 initial begin
     for (i = 0; i < 1048576; i = i + 1) begin
         base_mem[i] = 32'b0;
         ext_mem[i] = 32'b0;
     end
     $readmemh("/tmp/kernel_mips.hex", base_mem);
+    if ($value$plusargs("EXT_HEX=%s", ext_hex_path)) begin
+        $readmemh(ext_hex_path, ext_mem);
+    end
 end
 
 assign base_ram_data = (!base_ram_ce_n && !base_ram_oe_n && base_ram_we_n) ? base_mem[base_ram_addr] : 32'bz;
