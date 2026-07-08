@@ -434,9 +434,9 @@ always @(posedge clk) begin
                     if_id_valid <= 1'b1;
                     if_id_pc <= fetch_buf_pc;
                     if_id_inst <= fetch_buf_inst;
-                    if (redirect_pending) begin
+                    if (redirect_pending || control_taken_now) begin
                         fetch_buf_valid <= 1'b0;
-                        fetch_pc <= redirect_target;
+                        fetch_pc <= redirect_pending ? redirect_target : id_branch_target;
                         redirect_pending <= 1'b0;
                     end else if (!(bus_valid && bus_ready && bus_owner == BUS_IF)) begin
                         fetch_buf_valid <= 1'b0;

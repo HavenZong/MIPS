@@ -19,6 +19,7 @@ const uint32_t kUartStatusAddr = 0xbfd003fcu;
 const uint32_t kUserBase = 0x80100000u;
 const uint32_t kUserDataBase = 0x80400000u;
 const uint32_t kMatrixOutBase = 0x80420000u;
+const uint32_t kCryptonightWords = 0x80000u;
 const char kMatrixInPath[] = "/tmp/matrix.in";
 const char kMatrixOutPath[] = "/tmp/matrix.out";
 const char kMonitorWelcome[] = "MONITOR for MIPS32 - initialized.";
@@ -157,6 +158,7 @@ int main(int argc, char** argv) {
     load_bin(mem, argv[1], kResetPc);
     std::string program(argv[1]);
     bool perf_matrix_mode = program.find("perf-matrix") != std::string::npos || kernel_matrix_mode;
+    bool cryptonight_mode = program.find("cryptonight") != std::string::npos;
     std::vector<uint32_t> matrix_expected;
     if (perf_matrix_mode) {
         load_hex_words(mem, kMatrixInPath, kUserDataBase);
@@ -173,6 +175,14 @@ int main(int argc, char** argv) {
     dut.eval();
 
     PendingBus pending;
+    int bus_delay = 1;
+    if (const char* bus_delay_env = std::getenv("BUS_DELAY")) {
+        bus_delay = std::atoi(bus_delay_env);
+        if (bus_delay < 1) {
+            bus_delay = 1;
+        }
+    }
+    int pending_delay = 0;
     bool ready_next = false;
     uint32_t rdata_next = 0;
     std::deque<uint8_t> uart_rx;
@@ -192,6 +202,7 @@ int main(int argc, char** argv) {
 
     uint64_t max_cycles = kernel_matrix_mode ? 200000000ull :
                           kernel_c3_mode ? 20000000ull :
+                          cryptonight_mode ? 250000000ull :
                           perf_matrix_mode ? 100000000ull :
                           20000ull;
     for (uint64_t cycle = 0; cycle < max_cycles; ++cycle) {
@@ -226,7 +237,11 @@ int main(int argc, char** argv) {
             last_wb_pc = dut.debug_pc;
         }
 
-        if (pending.valid) {
+        if (pending.valid && pending_delay > 0) {
+            --pending_delay;
+        }
+
+        if (pending.valid && pending_delay == 0) {
             if (pending.addr == kUartStatusAddr) {
                 rdata_next = 0x1u | (uart_rx.empty() ? 0x0u : 0x2u);
             } else if (pending.addr == kUartDataAddr) {
@@ -255,8 +270,9 @@ int main(int argc, char** argv) {
             }
             ready_next = true;
             pending.valid = false;
-        } else if (dut.bus_valid) {
+        } else if (!pending.valid && dut.bus_valid) {
             pending.valid = true;
+            pending_delay = bus_delay - 1;
             pending.write = dut.bus_write;
             pending.size = dut.bus_size;
             pending.addr = dut.bus_addr;
@@ -388,6 +404,9 @@ int main(int argc, char** argv) {
         if (!kernel_c3_mode && same_pc_count > 100) {
             break;
         }
+        if (cryptonight_mode && !kernel_c3_mode && dut.debug_pc < kResetPc) {
+            break;
+        }
     }
 
     if (kernel_c3_mode) {
@@ -466,6 +485,49 @@ int main(int argc, char** argv) {
             return 0;
         }
         return 1;
+    }
+
+    if (cryptonight_mode) {
+        std::vector<uint32_t> expected(kCryptonightWords, 0);
+        for (uint32_t i = 0; i < kCryptonightWords; ++i) {
+            expected[i] = i;
+        }
+
+        uint32_t a1 = 0xdeadbeefu;
+        uint32_t a2 = 0xfaceb00cu;
+        const uint32_t a3 = 0x00100000u;
+        const uint32_t t2_mask = 0x0007ffffu;
+        for (uint32_t t1 = 0; t1 < a3; ++t1) {
+            uint32_t idx0 = a1 & t2_mask;
+            uint32_t v0 = expected[idx0];
+            uint32_t v1 = a1 >> 1;
+            v0 = (v0 << 1) ^ v1;
+            v1 = v0 & t2_mask;
+            a2 = v0 ^ a2;
+            expected[idx0] = a2;
+            uint32_t t0 = expected[v1];
+            a2 = v0;
+            v0 = static_cast<uint32_t>(
+                static_cast<uint64_t>(v0) * static_cast<uint64_t>(t0));
+            a1 = v0 + a1;
+            expected[v1] = a1;
+            a1 = t0 ^ a1;
+        }
+
+        for (uint32_t i = 0; i < kCryptonightWords; ++i) {
+            uint32_t actual = load_word(mem, kUserDataBase + i * 4u);
+            if (actual != expected[i]) {
+                std::fprintf(stderr,
+                             "cryptonight mismatch at word %u addr=%08x actual=%08x expected=%08x\n",
+                             i,
+                             kUserDataBase + i * 4u,
+                             actual,
+                             expected[i]);
+                return 1;
+            }
+        }
+        std::printf("cryptonight memory check passed\n");
+        return 0;
     }
 
     const uint32_t expected[] = {2, 3, 5, 8, 13, 21, 34, 55};

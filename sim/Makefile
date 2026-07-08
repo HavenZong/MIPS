@@ -10,7 +10,7 @@ SYSTEM_TOP = soc_system_tb
 SYSTEM_EXE = obj_dir/V$(SYSTEM_TOP)
 SYSTEM_REAL_UART_EXE = obj_dir/V$(SYSTEM_TOP)_real_uart
 
-.PHONY: all core-sample isa-directed lab1 perf-matrix kernel-c3 kernel-perf soc-bus soc-system soc-system-perf soc-system-real-uart clean
+.PHONY: all core-sample isa-directed lab1 perf-matrix cryptonight kernel-c3 kernel-perf soc-bus soc-system soc-system-perf soc-system-real-uart clean
 
 all: core-sample isa-directed lab1 soc-bus
 
@@ -49,6 +49,9 @@ perf-matrix: $(CORE_EXE) ../asm/perf-matrix.bin
 	unzip -p /home/luoshuang/下载/supervisor_mips.zip supervisor_mips/utility/matrix.in > /tmp/matrix.in
 	unzip -p /home/luoshuang/下载/supervisor_mips.zip supervisor_mips/utility/matrix.out > /tmp/matrix.out
 	TRACE=$(TRACE) $(CORE_EXE) ../asm/perf-matrix.bin
+
+cryptonight: $(CORE_EXE) ../asm/cryptonight.bin
+	TRACE=$(TRACE) BUS_DELAY=$(BUS_DELAY) $(CORE_EXE) ../asm/cryptonight.bin
 
 kernel-c3: $(CORE_EXE) ../asm/c3-user.bin
 	TRACE=$(TRACE) $(CORE_EXE) "$(KERNEL_C3_BIN)" ../asm/c3-user.bin
