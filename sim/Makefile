@@ -5,8 +5,10 @@ CORE_TOP = mips_core
 CORE_EXE = obj_dir/V$(CORE_TOP)
 BUS_TOP = soc_bus
 BUS_EXE = obj_dir/V$(BUS_TOP)
+SYSTEM_TOP = soc_system_tb
+SYSTEM_EXE = obj_dir/V$(SYSTEM_TOP)
 
-.PHONY: all core-sample isa-directed lab1 kernel-c3 soc-bus clean
+.PHONY: all core-sample isa-directed lab1 kernel-c3 soc-bus soc-system clean
 
 all: core-sample isa-directed lab1 soc-bus
 
@@ -19,6 +21,11 @@ $(BUS_EXE): soc_bus_sim.cpp ../src/soc/soc_bus.v ../src/soc/async.v
 	$(VERILATOR) --cc --exe -Wall -Wno-fatal --top-module $(BUS_TOP) \
 		-CFLAGS "$(CXXFLAGS)" ../src/soc/soc_bus.v ../src/soc/async.v soc_bus_sim.cpp
 	$(MAKE) -C obj_dir -f V$(BUS_TOP).mk
+
+$(SYSTEM_EXE): soc_system_sim.cpp soc_system_tb.v ../src/soc/mips_core.v ../src/soc/soc_bus.v ../src/soc/async.v
+	$(VERILATOR) --cc --exe -Wall -Wno-fatal -DSIMULATION --top-module $(SYSTEM_TOP) \
+		-CFLAGS "$(CXXFLAGS)" soc_system_tb.v ../src/soc/mips_core.v ../src/soc/soc_bus.v ../src/soc/async.v soc_system_sim.cpp
+	$(MAKE) -C obj_dir -f V$(SYSTEM_TOP).mk
 
 core-sample: $(CORE_EXE) ../asm/user-sample.bin
 	TRACE=$(TRACE) $(CORE_EXE) ../asm/user-sample.bin
@@ -34,6 +41,10 @@ kernel-c3: $(CORE_EXE) ../asm/c3-user.bin
 
 soc-bus: $(BUS_EXE)
 	$(BUS_EXE)
+
+soc-system: $(SYSTEM_EXE)
+	od -An -tx4 -v /home/luoshuang/下载/kernel.bin > /tmp/kernel_mips.hex
+	$(SYSTEM_EXE)
 
 clean:
 	rm -rf obj_dir
