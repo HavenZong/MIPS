@@ -1,0 +1,53 @@
+# ===== 比赛发布包（大文件，不上传）=====
+nscscc2026个人赛发布包_mips_v1.0.zip
+
+# ===== Windows 开发环境（~920MB，不上传）=====
+windows_env_v0.01/
+
+# ===== 官方文档（二进制 PDF/DOCX，不上传）=====
+documents/
+
+# ===== 你的技术方案 PDF（二进制，不上传）=====
+*.pdf
+
+# ===== Vivado 工程目录（生成的）=====
+run_vivado/project/
+
+# ===== 汇编构建产物 =====
+asm/*.bin
+asm/*.o
+asm/*.elf
+
+# ===== Vivado 生成的中间文件 =====
+*.cache/
+*.runs/
+*.gen/
+*.ip_user_files/
+*.hw/
+*.hbs/
+*.xpr.user
+.Xil/
+vivado*.jou
+vivado*.log
+vivado*.str
+vivado_pid*.str
+*.backup.jou
+*.backup.log
+webtalk*.jou
+webtalk*.log
+webtalk/
+usage_statistics_webtalk.*
+*.wdb
+*.pb
+
+# ===== Claude 本地配置 =====
+.claude/
+
+# ===== 通用忽略 =====
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+__pycache__/
+*.pyc
