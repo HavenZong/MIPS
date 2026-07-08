@@ -136,6 +136,7 @@ wire mem_stage_needs_bus = ex_mem_valid && (ex_mem_mem_read || ex_mem_mem_write)
 wire mem_completes = mem_stage_needs_bus && mem_active && bus_owner == BUS_MEM && bus_ready;
 wire mem_stall = mem_stage_needs_bus && !mem_completes;
 wire mem_blocks_fetch = mem_stage_needs_bus && !mem_completes;
+wire id_ex_needs_bus = id_ex_valid && (id_ex_mem_read || id_ex_mem_write);
 
 wire load_use_hazard =
     if_id_valid && id_ex_valid && id_ex_mem_read && id_ex_wb_addr != 5'b0 &&
@@ -153,7 +154,18 @@ wire fetch_buf_take = fetch_buf_valid && if_id_can_accept &&
 wire fetch_response_can_enqueue = fetch_response_now &&
                                   (!redirect_pending || if_req_pc == redirect_delay_pc) &&
                                   (!control_taken_now || if_req_pc == control_delay_pc_now);
+wire redirect_fetch_after_delay = fetch_buf_take && (redirect_pending || control_taken_now);
+wire [31:0] redirect_fetch_pc =
+    redirect_pending ? redirect_target : id_branch_target;
+wire stream_fetch_after_take = fetch_buf_take && !redirect_pending &&
+                               !control_taken_now && !fetch_spill_valid;
 wire bus_free_after_ready = !bus_valid || bus_ready;
+wire can_issue_ex_mem = bus_free_after_ready && (!mem_stage_needs_bus || mem_completes) &&
+                        id_ex_needs_bus && !mem_stall;
+wire can_issue_redirect_fetch = bus_free_after_ready && !fetch_response_now &&
+                                !mem_blocks_fetch && redirect_fetch_after_delay;
+wire can_issue_stream_fetch = bus_free_after_ready && !fetch_response_now &&
+                              !mem_blocks_fetch && stream_fetch_after_take;
 wire can_issue_fetch = bus_free_after_ready && !fetch_response_now &&
                        !fetch_buf_valid && !fetch_spill_valid && !mem_blocks_fetch &&
                        if_id_can_accept && (!redirect_pending || fetch_pc == redirect_delay_pc) &&
@@ -395,14 +407,17 @@ always @(posedge clk) begin
             mem_wb_wb_addr <= ex_mem_wb_addr;
             mem_wb_wb_data <= mem_load_value;
             mem_active <= 1'b0;
-            ex_mem_valid <= 1'b0;
         end else if (!mem_stall) begin
             mem_wb_valid <= ex_mem_valid && !(ex_mem_mem_read || ex_mem_mem_write);
             mem_wb_pc <= ex_mem_pc;
             mem_wb_wb_en <= ex_mem_wb_en && !(ex_mem_mem_read || ex_mem_mem_write);
             mem_wb_wb_addr <= ex_mem_wb_addr;
             mem_wb_wb_data <= ex_mem_wb_data;
+        end else begin
+            mem_wb_valid <= 1'b0;
+        end
 
+        if (!mem_stall) begin
             ex_mem_valid <= id_ex_valid;
             ex_mem_pc <= id_ex_pc;
             ex_mem_wb_en <= id_ex_wb_en;
@@ -493,8 +508,6 @@ always @(posedge clk) begin
                     if_id_valid <= 1'b0;
                 end
             end
-        end else begin
-            mem_wb_valid <= 1'b0;
         end
 
         if (!bus_valid && mem_stage_needs_bus && !mem_active) begin
@@ -505,6 +518,32 @@ always @(posedge clk) begin
             bus_addr <= ex_mem_mem_addr;
             bus_wdata <= mem_store_data;
             mem_active <= 1'b1;
+        end else if (can_issue_ex_mem) begin
+            bus_valid <= 1'b1;
+            bus_owner <= BUS_MEM;
+            bus_write <= id_ex_mem_write;
+            bus_size <= id_ex_mem_size;
+            bus_addr <= ex_alu_result;
+            bus_wdata <= ex_store_data;
+            mem_active <= 1'b1;
+        end else if (can_issue_redirect_fetch) begin
+            bus_valid <= 1'b1;
+            bus_owner <= BUS_IF;
+            bus_write <= 1'b0;
+            bus_size <= SIZE_WORD;
+            bus_addr <= redirect_fetch_pc;
+            bus_wdata <= 32'b0;
+            if_req_pc <= redirect_fetch_pc;
+            fetch_pc <= redirect_fetch_pc + 32'd4;
+        end else if (can_issue_stream_fetch) begin
+            bus_valid <= 1'b1;
+            bus_owner <= BUS_IF;
+            bus_write <= 1'b0;
+            bus_size <= SIZE_WORD;
+            bus_addr <= fetch_pc;
+            bus_wdata <= 32'b0;
+            if_req_pc <= fetch_pc;
+            fetch_pc <= fetch_pc + 32'd4;
         end else if (can_issue_fetch) begin
             bus_valid <= 1'b1;
             bus_owner <= BUS_IF;
