@@ -169,7 +169,7 @@ always @(posedge clk) begin
                                 cpu_rdata <= {24'b0, uart_rx_valid ? uart_rx_data : 8'b0};
                                 uart_rx_valid <= 1'b0;
                             end else begin
-                                cpu_rdata <= {30'b0, uart_tx_busy, uart_rx_valid};
+                                cpu_rdata <= {30'b0, uart_rx_valid, !uart_tx_busy};
                             end
                             cpu_ready <= 1'b1;
                             state <= B_RESP;
