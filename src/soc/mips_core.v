@@ -415,6 +415,7 @@ always @(posedge clk) begin
                     redirect_pending <= 1'b1;
                     redirect_target <= id_branch_target;
                     redirect_delay_pc <= if_id_pc + 32'd4;
+                    fetch_pc <= if_id_pc + 32'd4;
                     if ((fetch_buf_valid && fetch_buf_pc != if_id_pc + 32'd4) ||
                         (bus_valid && bus_ready && bus_owner == BUS_IF && if_req_pc != if_id_pc + 32'd4)) begin
                         fetch_buf_valid <= 1'b0;

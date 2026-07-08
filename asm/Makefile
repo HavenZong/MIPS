@@ -9,16 +9,20 @@ AR      := $(GCCPREFIX)ar
 OBJCOPY := $(GCCPREFIX)objcopy
 OBJDUMP := $(GCCPREFIX)objdump
 
-SRC   := $(wildcard *.s)
+SRC   := $(filter-out c3-user.s,$(wildcard *.s))
 BINS  := $(patsubst %.s, %.bin, $(SRC))
+USER_BINS := c3-user.bin
 
-all: $(BINS)
+all: $(BINS) $(USER_BINS)
 
 %.bin: %.elf
 	$(OBJCOPY) -j .text -O binary $^ $@
 
 %.elf: %.o
 	$(LD) $(LDFLAGS) -Ttext 0x80000000 -o $@ $^
+
+c3-user.elf: c3-user.o
+	$(LD) $(LDFLAGS) -Ttext 0x80100000 -o $@ $^
 
 %.o: %.s
 	$(CC) $(CFLAGS) -x assembler-with-cpp -c -o $@ $^

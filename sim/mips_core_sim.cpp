@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <deque>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -12,6 +13,11 @@ namespace {
 
 const uint32_t kResetPc = 0x80000000u;
 const uint32_t kMemSize = 8u * 1024u * 1024u;
+const uint32_t kUartDataAddr = 0xbfd003f8u;
+const uint32_t kUartStatusAddr = 0xbfd003fcu;
+const uint32_t kUserBase = 0x80100000u;
+const uint32_t kUserDataBase = 0x80400000u;
+const char kMonitorWelcome[] = "MONITOR for MIPS32 - initialized.";
 
 uint32_t phys_addr(uint32_t addr) {
     return addr & (kMemSize - 1u);
@@ -51,6 +57,30 @@ void load_bin(std::vector<uint8_t>& mem, const std::string& path, uint32_t addr)
     }
 }
 
+std::vector<uint8_t> read_file(const std::string& path) {
+    std::ifstream file(path.c_str(), std::ios::binary);
+    if (!file) {
+        std::fprintf(stderr, "failed to open %s\n", path.c_str());
+        std::exit(2);
+    }
+    return std::vector<uint8_t>((std::istreambuf_iterator<char>(file)),
+                                std::istreambuf_iterator<char>());
+}
+
+void append_u32_le(std::deque<uint8_t>& data, uint32_t value) {
+    data.push_back(value & 0xffu);
+    data.push_back((value >> 8) & 0xffu);
+    data.push_back((value >> 16) & 0xffu);
+    data.push_back((value >> 24) & 0xffu);
+}
+
+uint32_t bytes_to_u32_le(const std::vector<uint8_t>& data, size_t offset) {
+    return static_cast<uint32_t>(data[offset]) |
+           (static_cast<uint32_t>(data[offset + 1]) << 8) |
+           (static_cast<uint32_t>(data[offset + 2]) << 16) |
+           (static_cast<uint32_t>(data[offset + 3]) << 24);
+}
+
 struct PendingBus {
     bool valid = false;
     bool write = false;
@@ -71,8 +101,18 @@ void tick(Vmips_core& dut) {
 int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);
     if (argc < 2) {
-        std::fprintf(stderr, "usage: %s <program.bin>\n", argv[0]);
+        std::fprintf(stderr, "usage: %s <program.bin> [c3-user.bin]\n", argv[0]);
         return 2;
+    }
+
+    bool kernel_c3_mode = argc >= 3;
+    std::vector<uint8_t> c3_user;
+    if (kernel_c3_mode) {
+        c3_user = read_file(argv[2]);
+        if (c3_user.empty() || (c3_user.size() % 4) != 0) {
+            std::fprintf(stderr, "c3 user binary must be non-empty and word aligned\n");
+            return 2;
+        }
     }
 
     std::vector<uint8_t> mem(kMemSize, 0);
@@ -90,6 +130,11 @@ int main(int argc, char** argv) {
     PendingBus pending;
     bool ready_next = false;
     uint32_t rdata_next = 0;
+    std::deque<uint8_t> uart_rx;
+    std::vector<uint8_t> uart_tx;
+    std::vector<uint8_t> kernel_response;
+    bool c3_script_loaded = false;
+    bool c3_pass = false;
 
     for (int i = 0; i < 5; ++i) {
         tick(dut);
@@ -99,7 +144,8 @@ int main(int argc, char** argv) {
     uint32_t last_wb_pc = 0xffffffffu;
     int same_pc_count = 0;
 
-    for (uint64_t cycle = 0; cycle < 20000; ++cycle) {
+    uint64_t max_cycles = kernel_c3_mode ? 20000000ull : 20000ull;
+    for (uint64_t cycle = 0; cycle < max_cycles; ++cycle) {
         dut.bus_ready = ready_next ? 1 : 0;
         dut.bus_rdata = rdata_next;
         ready_next = false;
@@ -132,14 +178,32 @@ int main(int argc, char** argv) {
         }
 
         if (pending.valid) {
-            if (pending.write) {
+            if (pending.addr == kUartStatusAddr) {
+                rdata_next = 0x1u | (uart_rx.empty() ? 0x0u : 0x2u);
+            } else if (pending.addr == kUartDataAddr) {
+                if (pending.write) {
+                    uart_tx.push_back(static_cast<uint8_t>(pending.wdata & 0xffu));
+                    if (trace) {
+                        std::printf("uart_tx[%zu] = %02x\n",
+                                    uart_tx.size() - 1u,
+                                    static_cast<unsigned>(uart_tx.back()));
+                    }
+                } else if (!uart_rx.empty()) {
+                    rdata_next = uart_rx.front();
+                    uart_rx.pop_front();
+                } else {
+                    rdata_next = 0;
+                }
+            } else if (pending.write) {
                 if (pending.size == 0) {
                     store_byte(mem, pending.addr, pending.wdata);
                 } else {
                     store_word(mem, pending.addr, pending.wdata);
                 }
+                rdata_next = load_word(mem, pending.addr & ~3u);
+            } else {
+                rdata_next = load_word(mem, pending.addr & ~3u);
             }
-            rdata_next = load_word(mem, pending.addr & ~3u);
             ready_next = true;
             pending.valid = false;
         } else if (dut.bus_valid) {
@@ -150,9 +214,93 @@ int main(int argc, char** argv) {
             pending.wdata = dut.bus_wdata;
         }
 
-        if (same_pc_count > 100) {
+        if (kernel_c3_mode && !c3_script_loaded &&
+            uart_tx.size() >= sizeof(kMonitorWelcome) - 1u) {
+            std::string welcome(uart_tx.begin(), uart_tx.begin() + sizeof(kMonitorWelcome) - 1u);
+            std::printf("kernel welcome: %s\n", welcome.c_str());
+            if (welcome != kMonitorWelcome) {
+                std::fprintf(stderr, "kernel welcome mismatch\n");
+                return 1;
+            }
+
+            uart_rx.push_back('A');
+            append_u32_le(uart_rx, kUserBase);
+            append_u32_le(uart_rx, static_cast<uint32_t>(c3_user.size()));
+            for (size_t i = 0; i < c3_user.size(); ++i) {
+                uart_rx.push_back(c3_user[i]);
+            }
+
+            uart_rx.push_back('D');
+            append_u32_le(uart_rx, kUserBase);
+            append_u32_le(uart_rx, static_cast<uint32_t>(c3_user.size()));
+
+            uart_rx.push_back('G');
+            append_u32_le(uart_rx, kUserBase);
+
+            uart_rx.push_back('R');
+
+            uart_rx.push_back('D');
+            append_u32_le(uart_rx, kUserDataBase);
+            append_u32_le(uart_rx, 4);
+
+            c3_script_loaded = true;
+        }
+
+        if (kernel_c3_mode && c3_script_loaded) {
+            size_t welcome_len = sizeof(kMonitorWelcome) - 1u;
+            if (uart_tx.size() > welcome_len) {
+                kernel_response.assign(uart_tx.begin() + welcome_len, uart_tx.end());
+            }
+
+            size_t expected_len = c3_user.size() + 2u + 120u + 4u;
+            if (kernel_response.size() >= expected_len) {
+                bool ok = true;
+                for (size_t i = 0; i < c3_user.size(); ++i) {
+                    if (kernel_response[i] != c3_user[i]) {
+                        ok = false;
+                        std::fprintf(stderr, "D command mismatch at byte %zu\n", i);
+                        break;
+                    }
+                }
+                size_t off = c3_user.size();
+                if (kernel_response[off] != 0x06 || kernel_response[off + 1] != 0x07) {
+                    std::fprintf(stderr, "G command markers mismatch: %02x %02x\n",
+                                 kernel_response[off], kernel_response[off + 1]);
+                    ok = false;
+                }
+                off += 2;
+                uint32_t reg_v0 = bytes_to_u32_le(kernel_response, off + (2u - 1u) * 4u);
+                if (reg_v0 != 0) {
+                    std::fprintf(stderr, "R command v0 fail_count = %u\n", reg_v0);
+                    ok = false;
+                }
+                off += 120;
+                uint32_t mem_fail_count = bytes_to_u32_le(kernel_response, off);
+                std::printf("kernel D/G/R checks: v0=%u mem_fail_count=%u\n", reg_v0, mem_fail_count);
+                if (mem_fail_count != 0) {
+                    ok = false;
+                }
+                if (!ok) {
+                    return 1;
+                }
+                std::printf("kernel-c3 monitor check passed\n");
+                c3_pass = true;
+                break;
+            }
+        }
+
+        if (!kernel_c3_mode && same_pc_count > 100) {
             break;
         }
+    }
+
+    if (kernel_c3_mode) {
+        if (!c3_pass) {
+            std::fprintf(stderr, "kernel-c3 monitor check timed out, tx=%zu pc=%08x\n",
+                         uart_tx.size(), dut.debug_pc);
+            return 1;
+        }
+        return 0;
     }
 
     std::string program(argv[1]);

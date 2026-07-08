@@ -4,7 +4,7 @@ CXXFLAGS += -std=c++11 -O2
 CORE_TOP = mips_core
 CORE_EXE = obj_dir/V$(CORE_TOP)
 
-.PHONY: all core-sample isa-directed lab1 clean
+.PHONY: all core-sample isa-directed lab1 kernel-c3 clean
 
 all: core-sample isa-directed lab1
 
@@ -21,6 +21,9 @@ isa-directed: $(CORE_EXE) ../asm/isa-directed.bin
 
 lab1: $(CORE_EXE) ../asm/lab1.bin
 	TRACE=$(TRACE) $(CORE_EXE) ../asm/lab1.bin
+
+kernel-c3: $(CORE_EXE) ../asm/c3-user.bin
+	TRACE=$(TRACE) $(CORE_EXE) /home/luoshuang/下载/kernel.bin ../asm/c3-user.bin
 
 clean:
 	rm -rf obj_dir
