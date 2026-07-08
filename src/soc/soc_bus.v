@@ -44,7 +44,7 @@ localparam B_UART_START  = 3'd4;
 localparam B_UART_DUMMY  = 3'd5;
 localparam UART_RX_FIFO_DEPTH = 1024;
 localparam [19:0] UART_DUMMY_BASE = 20'hf8000; // ExtRAM byte offset 0x003e0000.
-localparam [2:0] SRAM_WAIT_CYCLES = 3'd4;
+localparam [2:0] SRAM_WAIT_CYCLES = 3'd1;
 localparam [2:0] UART_DUMMY_WAIT_CYCLES = 3'd2;
 
 reg [2:0] state;

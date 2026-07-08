@@ -145,7 +145,8 @@ wire [31:0] control_delay_pc_now = if_id_pc + 32'd4;
 wire fetch_buf_take = fetch_buf_valid && if_id_can_accept &&
                       (!redirect_pending || fetch_buf_pc == redirect_delay_pc) &&
                       (!control_taken_now || fetch_buf_pc == control_delay_pc_now);
-wire can_issue_fetch = !bus_valid && !fetch_buf_valid && !mem_stage_needs_bus &&
+wire bus_free_after_ready = !bus_valid || bus_ready;
+wire can_issue_fetch = bus_free_after_ready && !fetch_buf_valid && !mem_stage_needs_bus &&
                        if_id_can_accept && (!redirect_pending || fetch_pc == redirect_delay_pc) &&
                        (!control_taken_now || fetch_pc == control_delay_pc_now);
 

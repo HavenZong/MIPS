@@ -321,8 +321,9 @@ int main(int argc, char** argv) {
                 }
             }
             if (ok && any_nonzero) {
-                std::printf("%s matrix memory check passed\n",
-                            kernel_matrix_mode ? "kernel-perf" : "perf-matrix");
+                std::printf("%s matrix memory check passed at cycle %llu\n",
+                            kernel_matrix_mode ? "kernel-perf" : "perf-matrix",
+                            static_cast<unsigned long long>(cycle));
                 matrix_pass = true;
                 break;
             }
