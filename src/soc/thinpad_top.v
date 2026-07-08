@@ -49,15 +49,29 @@ module thinpad_top(
 );
 
 wire clk = clk_50M;
-reg reset_sync_0;
-reg reset_sync_1;
+localparam RESET_HOLD_CYCLES = 23'd5_000_000; // 100 ms at 50 MHz.
+reg reset_sync_0 = 1'b1;
+reg reset_sync_1 = 1'b1;
+reg [22:0] reset_hold_count = 23'b0;
+reg reset_hold = 1'b1;
 
 always @(posedge clk) begin
     reset_sync_0 <= reset_btn;
     reset_sync_1 <= reset_sync_0;
+
+    if (reset_sync_1) begin
+        reset_hold_count <= 23'b0;
+        reset_hold <= 1'b1;
+    end else if (reset_hold) begin
+        if (reset_hold_count == RESET_HOLD_CYCLES - 23'd1) begin
+            reset_hold <= 1'b0;
+        end else begin
+            reset_hold_count <= reset_hold_count + 23'd1;
+        end
+    end
 end
 
-wire reset = reset_sync_1;
+wire reset = reset_sync_1 || reset_hold;
 
 wire        cpu_bus_valid;
 wire        cpu_bus_write;

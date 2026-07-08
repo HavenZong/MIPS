@@ -41,8 +41,9 @@ localparam B_SRAM_WAIT   = 3'd1;
 localparam B_RESP        = 3'd2;
 localparam B_UART_TXWAIT = 3'd3;
 localparam B_UART_START  = 3'd4;
-localparam B_UART_WAIT   = 3'd5;
+localparam B_UART_DUMMY  = 3'd5;
 localparam UART_RX_FIFO_DEPTH = 1024;
+localparam [19:0] UART_DUMMY_BASE = 20'hf8000; // ExtRAM byte offset 0x003e0000.
 
 reg [2:0] state;
 reg [1:0] wait_count;
@@ -68,6 +69,7 @@ reg [10:0] uart_rx_count;
 reg [7:0] uart_tx_data;
 reg uart_tx_start;
 wire uart_tx_busy;
+reg [7:0] uart_dummy_count;
 
 async_receiver #(
     .ClkFrequency(CLK_FREQ),
@@ -147,6 +149,7 @@ always @(posedge clk) begin
         uart_rx_count <= 11'b0;
         uart_tx_data <= 8'b0;
         uart_tx_start <= 1'b0;
+        uart_dummy_count <= 8'b0;
     end else begin
         cpu_ready <= 1'b0;
         uart_tx_start <= 1'b0;
@@ -189,11 +192,20 @@ always @(posedge clk) begin
                         end else begin
                             if (is_uart_data) begin
                                 cpu_rdata <= {24'b0, uart_rx_fifo_empty ? 8'b0 : uart_rx_fifo[uart_rx_head]};
+                                ext_dout <= {8'h55, uart_dummy_count, 8'h52, uart_rx_fifo_empty ? 8'b0 : uart_rx_fifo[uart_rx_head]};
                             end else begin
                                 cpu_rdata <= {24'b0, uart_status_value};
+                                ext_dout <= {8'h55, uart_dummy_count, 8'h53, uart_status_value};
                             end
+                            ext_ram_addr <= UART_DUMMY_BASE + {12'b0, uart_dummy_count};
+                            ext_ram_be_n <= 4'b0000;
+                            ext_ram_ce_n <= 1'b0;
+                            ext_ram_oe_n <= 1'b1;
+                            ext_ram_we_n <= 1'b0;
+                            ext_drive <= 1'b1;
                             wait_count <= 2'd2;
-                            state <= B_UART_WAIT;
+                            uart_dummy_count <= uart_dummy_count + 8'd1;
+                            state <= B_UART_DUMMY;
                         end
                     end else begin
                         active_ext <= select_ext;
@@ -250,14 +262,26 @@ always @(posedge clk) begin
             B_UART_START: begin
                 if (!uart_tx_busy) begin
                     uart_tx_start <= 1'b1;
+                    ext_ram_addr <= UART_DUMMY_BASE + {12'b0, uart_dummy_count};
+                    ext_ram_be_n <= 4'b0000;
+                    ext_ram_ce_n <= 1'b0;
+                    ext_ram_oe_n <= 1'b1;
+                    ext_ram_we_n <= 1'b0;
+                    ext_dout <= {8'h55, uart_dummy_count, 8'h57, uart_tx_data};
+                    ext_drive <= 1'b1;
                     wait_count <= 2'd2;
-                    state <= B_UART_WAIT;
+                    uart_dummy_count <= uart_dummy_count + 8'd1;
+                    state <= B_UART_DUMMY;
                 end
             end
-            B_UART_WAIT: begin
+            B_UART_DUMMY: begin
                 if (wait_count != 2'b0) begin
                     wait_count <= wait_count - 2'b1;
                 end else begin
+                    ext_ram_ce_n <= 1'b1;
+                    ext_ram_we_n <= 1'b1;
+                    ext_ram_be_n <= 4'hf;
+                    ext_drive <= 1'b0;
                     cpu_ready <= 1'b1;
                     state <= B_RESP;
                 end
