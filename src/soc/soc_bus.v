@@ -40,6 +40,7 @@ localparam B_IDLE        = 3'd0;
 localparam B_SRAM_WAIT   = 3'd1;
 localparam B_RESP        = 3'd2;
 localparam B_UART_TXWAIT = 3'd3;
+localparam UART_RX_FIFO_DEPTH = 1024;
 
 reg [2:0] state;
 reg [1:0] wait_count;
@@ -57,7 +58,10 @@ assign ext_ram_data = ext_drive ? ext_dout : 32'bz;
 wire uart_rx_ready;
 wire uart_rx_clear;
 wire [7:0] uart_rx_data;
-reg uart_rx_valid;
+reg [7:0] uart_rx_fifo [0:UART_RX_FIFO_DEPTH-1];
+reg [9:0] uart_rx_head;
+reg [9:0] uart_rx_tail;
+reg [10:0] uart_rx_count;
 
 reg [7:0] uart_tx_data;
 reg uart_tx_start;
@@ -90,6 +94,10 @@ assign uart_rx_clear = uart_rx_ready;
 wire is_uart_data = (cpu_addr == UART_DATA_ADDR);
 wire is_uart_status = (cpu_addr == UART_STATUS_ADDR);
 wire is_uart = is_uart_data || is_uart_status;
+wire uart_rx_fifo_empty = (uart_rx_count == 11'd0);
+wire uart_rx_fifo_full = (uart_rx_count == 11'd1024);
+wire uart_rx_pop = (state == B_IDLE) && cpu_valid && !cpu_write && is_uart_data && !uart_rx_fifo_empty;
+wire uart_rx_push = uart_rx_ready && (!uart_rx_fifo_full || uart_rx_pop);
 
 wire [22:0] sram_addr = cpu_addr[22:0];
 wire select_ext = sram_addr[22];
@@ -129,16 +137,27 @@ always @(posedge clk) begin
         ext_drive <= 1'b0;
         base_dout <= 32'b0;
         ext_dout <= 32'b0;
-        uart_rx_valid <= 1'b0;
+        uart_rx_head <= 10'b0;
+        uart_rx_tail <= 10'b0;
+        uart_rx_count <= 11'b0;
         uart_tx_data <= 8'b0;
         uart_tx_start <= 1'b0;
     end else begin
         cpu_ready <= 1'b0;
         uart_tx_start <= 1'b0;
 
-        if (uart_rx_ready) begin
-            uart_rx_valid <= 1'b1;
+        if (uart_rx_push) begin
+            uart_rx_fifo[uart_rx_tail] <= uart_rx_data;
+            uart_rx_tail <= uart_rx_tail + 10'd1;
         end
+        if (uart_rx_pop) begin
+            uart_rx_head <= uart_rx_head + 10'd1;
+        end
+        case ({uart_rx_push, uart_rx_pop})
+            2'b10: uart_rx_count <= uart_rx_count + 11'd1;
+            2'b01: uart_rx_count <= uart_rx_count - 11'd1;
+            default: uart_rx_count <= uart_rx_count;
+        endcase
 
         case (state)
             B_IDLE: begin
@@ -166,10 +185,9 @@ always @(posedge clk) begin
                             end
                         end else begin
                             if (is_uart_data) begin
-                                cpu_rdata <= {24'b0, uart_rx_valid ? uart_rx_data : 8'b0};
-                                uart_rx_valid <= 1'b0;
+                                cpu_rdata <= {24'b0, uart_rx_fifo_empty ? 8'b0 : uart_rx_fifo[uart_rx_head]};
                             end else begin
-                                cpu_rdata <= {30'b0, uart_rx_valid, !uart_tx_busy};
+                                cpu_rdata <= {30'b0, !uart_rx_fifo_empty, !uart_tx_busy};
                             end
                             cpu_ready <= 1'b1;
                             state <= B_RESP;

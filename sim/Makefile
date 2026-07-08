@@ -7,8 +7,9 @@ BUS_TOP = soc_bus
 BUS_EXE = obj_dir/V$(BUS_TOP)
 SYSTEM_TOP = soc_system_tb
 SYSTEM_EXE = obj_dir/V$(SYSTEM_TOP)
+SYSTEM_REAL_UART_EXE = obj_dir/V$(SYSTEM_TOP)_real_uart
 
-.PHONY: all core-sample isa-directed lab1 kernel-c3 soc-bus soc-system clean
+.PHONY: all core-sample isa-directed lab1 kernel-c3 soc-bus soc-system soc-system-real-uart clean
 
 all: core-sample isa-directed lab1 soc-bus
 
@@ -24,8 +25,15 @@ $(BUS_EXE): soc_bus_sim.cpp ../src/soc/soc_bus.v ../src/soc/async.v
 
 $(SYSTEM_EXE): soc_system_sim.cpp soc_system_tb.v ../src/soc/mips_core.v ../src/soc/soc_bus.v ../src/soc/async.v
 	$(VERILATOR) --cc --exe -Wall -Wno-fatal -DSIMULATION --top-module $(SYSTEM_TOP) \
-		-CFLAGS "$(CXXFLAGS)" soc_system_tb.v ../src/soc/mips_core.v ../src/soc/soc_bus.v ../src/soc/async.v soc_system_sim.cpp
+		-CFLAGS "$(CXXFLAGS) -DFAST_UART" soc_system_tb.v ../src/soc/mips_core.v ../src/soc/soc_bus.v ../src/soc/async.v soc_system_sim.cpp
 	$(MAKE) -C obj_dir -f V$(SYSTEM_TOP).mk
+
+$(SYSTEM_REAL_UART_EXE): soc_system_sim.cpp soc_system_tb.v ../src/soc/mips_core.v ../src/soc/soc_bus.v ../src/soc/async.v
+	$(VERILATOR) --cc --exe -Wall -Wno-fatal --top-module $(SYSTEM_TOP) \
+		-CFLAGS "$(CXXFLAGS)" -Mdir obj_dir_real_uart soc_system_tb.v ../src/soc/mips_core.v ../src/soc/soc_bus.v ../src/soc/async.v soc_system_sim.cpp
+	$(MAKE) -C obj_dir_real_uart -f V$(SYSTEM_TOP).mk
+	mkdir -p obj_dir
+	cp obj_dir_real_uart/V$(SYSTEM_TOP) $(SYSTEM_REAL_UART_EXE)
 
 core-sample: $(CORE_EXE) ../asm/user-sample.bin
 	TRACE=$(TRACE) $(CORE_EXE) ../asm/user-sample.bin
@@ -46,5 +54,9 @@ soc-system: $(SYSTEM_EXE)
 	od -An -tx4 -v /home/luoshuang/下载/kernel.bin > /tmp/kernel_mips.hex
 	$(SYSTEM_EXE)
 
+soc-system-real-uart: $(SYSTEM_REAL_UART_EXE)
+	od -An -tx4 -v /home/luoshuang/下载/kernel.bin > /tmp/kernel_mips.hex
+	$(SYSTEM_REAL_UART_EXE)
+
 clean:
-	rm -rf obj_dir
+	rm -rf obj_dir obj_dir_real_uart

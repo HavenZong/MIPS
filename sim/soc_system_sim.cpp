@@ -1,18 +1,150 @@
 #include "Vsoc_system_tb.h"
 #include "verilated.h"
 
+#include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <fstream>
 #include <string>
+#include <vector>
 
 namespace {
 
 const char kWelcome[] = "MONITOR for MIPS32 - initialized.";
+const uint32_t kUserBase = 0x80100000u;
+const uint32_t kUserDataBase = 0x80400000u;
+#ifdef FAST_UART
+const unsigned kTicksPerBit = 1;
+#else
+const unsigned kTicksPerBit = 50000000 / 9600;
+#endif
 
-void tick(Vsoc_system_tb* dut) {
+std::vector<uint8_t> read_file(const char* path) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        std::fprintf(stderr, "failed to open %s\n", path);
+        std::exit(2);
+    }
+    return std::vector<uint8_t>((std::istreambuf_iterator<char>(file)),
+                                std::istreambuf_iterator<char>());
+}
+
+void append_u32_le(std::vector<uint8_t>* data, uint32_t value) {
+    data->push_back(value & 0xffu);
+    data->push_back((value >> 8) & 0xffu);
+    data->push_back((value >> 16) & 0xffu);
+    data->push_back((value >> 24) & 0xffu);
+}
+
+uint32_t bytes_to_u32_le(const std::string& data, size_t offset) {
+    return static_cast<uint32_t>(static_cast<uint8_t>(data[offset])) |
+           (static_cast<uint32_t>(static_cast<uint8_t>(data[offset + 1])) << 8) |
+           (static_cast<uint32_t>(static_cast<uint8_t>(data[offset + 2])) << 16) |
+           (static_cast<uint32_t>(static_cast<uint8_t>(data[offset + 3])) << 24);
+}
+
+class UartTxDecoder {
+public:
+    void sample(int txd) {
+        if (receiving_) {
+            if (countdown_ != 0) {
+                --countdown_;
+            }
+            if (countdown_ == 0) {
+                if (bit_ < 8) {
+                    if (txd) {
+                        value_ |= (1u << bit_);
+                    }
+                    ++bit_;
+                    countdown_ = kTicksPerBit;
+                } else {
+                    out.push_back(static_cast<char>(value_ & 0xffu));
+                    std::printf("uart char %02x '%c'\n", value_ & 0xffu,
+                                (value_ >= 32 && value_ <= 126) ? static_cast<char>(value_) : '.');
+                    receiving_ = false;
+                }
+            }
+        } else if (prev_txd_ == 1 && txd == 0) {
+            receiving_ = true;
+            countdown_ = kTicksPerBit + kTicksPerBit / 2;
+            bit_ = 0;
+            value_ = 0;
+        }
+        prev_txd_ = txd;
+    }
+
+    std::string out;
+
+private:
+    int prev_txd_ = 1;
+    bool receiving_ = false;
+    unsigned countdown_ = 0;
+    unsigned bit_ = 0;
+    unsigned value_ = 0;
+};
+
+void tick(Vsoc_system_tb* dut, UartTxDecoder* decoder) {
     dut->clk = 0;
     dut->eval();
     dut->clk = 1;
     dut->eval();
+    if (decoder != nullptr) {
+        decoder->sample(dut->txd);
+    }
+}
+
+void wait_cycles(Vsoc_system_tb* dut, UartTxDecoder* decoder, unsigned cycles) {
+    for (unsigned i = 0; i < cycles; ++i) {
+        tick(dut, decoder);
+    }
+}
+
+void send_uart_byte(Vsoc_system_tb* dut, UartTxDecoder* decoder, uint8_t value) {
+    dut->rxd = 0;
+    wait_cycles(dut, decoder, kTicksPerBit);
+    for (unsigned bit = 0; bit < 8; ++bit) {
+        dut->rxd = (value >> bit) & 1u;
+        wait_cycles(dut, decoder, kTicksPerBit);
+    }
+    dut->rxd = 1;
+    wait_cycles(dut, decoder, kTicksPerBit);
+}
+
+bool check_kernel_response(const std::string& response, const std::vector<uint8_t>& c3_user) {
+    const size_t expected_len = c3_user.size() + 2u + 120u + 4u;
+    if (response.size() < expected_len) {
+        return false;
+    }
+
+    bool ok = true;
+    for (size_t i = 0; i < c3_user.size(); ++i) {
+        if (static_cast<uint8_t>(response[i]) != c3_user[i]) {
+            std::fprintf(stderr, "D command mismatch at byte %zu\n", i);
+            ok = false;
+            break;
+        }
+    }
+
+    size_t off = c3_user.size();
+    if (static_cast<uint8_t>(response[off]) != 0x06 ||
+        static_cast<uint8_t>(response[off + 1]) != 0x07) {
+        std::fprintf(stderr, "G command markers mismatch: %02x %02x\n",
+                     static_cast<uint8_t>(response[off]),
+                     static_cast<uint8_t>(response[off + 1]));
+        ok = false;
+    }
+
+    off += 2;
+    uint32_t reg_v0 = bytes_to_u32_le(response, off + (2u - 1u) * 4u);
+    if (reg_v0 != 0) {
+        std::fprintf(stderr, "R command v0 fail_count = %u\n", reg_v0);
+        ok = false;
+    }
+
+    off += 120;
+    uint32_t mem_fail_count = bytes_to_u32_le(response, off);
+    std::printf("kernel D/G/R checks: v0=%u mem_fail_count=%u\n", reg_v0, mem_fail_count);
+    return ok && mem_fail_count == 0;
 }
 
 }  // namespace
@@ -26,39 +158,64 @@ int main(int argc, char** argv) {
     dut->rxd = 1;
     dut->eval();
 
+    UartTxDecoder decoder;
     for (int i = 0; i < 8; ++i) {
-        tick(dut);
+        tick(dut, &decoder);
     }
     dut->reset = 0;
 
-    std::string out;
-    int tx_prev = 1;
-    for (unsigned cycle = 0; cycle < 2000000 && out.size() < sizeof(kWelcome) - 1u; ++cycle) {
-        tick(dut);
-
-        if (tx_prev == 1 && dut->txd == 0) {
-            unsigned value = 0;
-            for (unsigned bit = 0; bit < 8; ++bit) {
-                tick(dut);
-                if (dut->txd) {
-                    value |= (1u << bit);
-                }
-            }
-            tick(dut);
-            out.push_back(static_cast<char>(value & 0xffu));
-            std::printf("uart char %02x '%c'\n", value & 0xffu,
-                        (value >= 32 && value <= 126) ? static_cast<char>(value) : '.');
-        }
-        tx_prev = dut->txd;
+    for (unsigned cycle = 0; cycle < 2000000 && decoder.out.size() < sizeof(kWelcome) - 1u; ++cycle) {
+        tick(dut, &decoder);
     }
 
-    std::printf("system welcome: %s\n", out.c_str());
-    if (out != kWelcome) {
-        std::fprintf(stderr, "system welcome mismatch, pc=%08x len=%zu\n", dut->debug_pc, out.size());
+    std::string welcome = decoder.out.substr(0, sizeof(kWelcome) - 1u);
+    std::printf("system welcome: %s\n", welcome.c_str());
+    if (welcome != kWelcome) {
+        std::fprintf(stderr, "system welcome mismatch, pc=%08x len=%zu\n", dut->debug_pc, decoder.out.size());
         return 1;
     }
 
+#ifndef FAST_UART
+    std::vector<uint8_t> c3_user = read_file("../asm/c3-user.bin");
+    std::vector<uint8_t> script;
+    script.push_back('A');
+    append_u32_le(&script, kUserBase);
+    append_u32_le(&script, static_cast<uint32_t>(c3_user.size()));
+    script.insert(script.end(), c3_user.begin(), c3_user.end());
+    script.push_back('D');
+    append_u32_le(&script, kUserBase);
+    append_u32_le(&script, static_cast<uint32_t>(c3_user.size()));
+    script.push_back('G');
+    append_u32_le(&script, kUserBase);
+    script.push_back('R');
+    script.push_back('D');
+    append_u32_le(&script, kUserDataBase);
+    append_u32_le(&script, 4);
+
+    for (size_t i = 0; i < script.size(); ++i) {
+        send_uart_byte(dut, &decoder, script[i]);
+    }
+
+    const size_t welcome_len = sizeof(kWelcome) - 1u;
+    const size_t expected_response_len = c3_user.size() + 2u + 120u + 4u;
+    for (unsigned cycle = 0;
+         cycle < 40000000 && decoder.out.size() < welcome_len + expected_response_len;
+         ++cycle) {
+        tick(dut, &decoder);
+    }
+
+    std::string response = decoder.out.substr(welcome_len);
+    if (!check_kernel_response(response, c3_user)) {
+        std::fprintf(stderr, "kernel response check failed, pc=%08x response_len=%zu\n",
+                     dut->debug_pc, response.size());
+        return 1;
+    }
+#endif
+
     std::printf("soc-system kernel welcome check passed\n");
+#ifndef FAST_UART
+    std::printf("soc-system real UART command check passed\n");
+#endif
     delete dut;
     return 0;
 }
