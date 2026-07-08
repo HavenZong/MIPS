@@ -28,6 +28,10 @@ localparam BUS_NONE = 2'd0;
 localparam BUS_IF   = 2'd1;
 localparam BUS_MEM  = 2'd2;
 
+localparam integer ICACHE_INDEX_BITS = 5;
+localparam integer ICACHE_LINES = (1 << ICACHE_INDEX_BITS);
+localparam integer ICACHE_TAG_LSB = ICACHE_INDEX_BITS + 2;
+
 reg [31:0] gpr [0:31];
 
 reg [1:0]  bus_owner;
@@ -39,6 +43,12 @@ reg [31:0] fetch_buf_inst;
 reg        fetch_spill_valid;
 reg [31:0] fetch_spill_pc;
 reg [31:0] fetch_spill_inst;
+reg [31:0] icache_data [0:ICACHE_LINES-1];
+reg [31:ICACHE_TAG_LSB] icache_tag [0:ICACHE_LINES-1];
+reg [ICACHE_LINES-1:0] icache_valid;
+reg        icache_resp_valid;
+reg [31:0] icache_resp_pc;
+reg [31:0] icache_resp_inst;
 
 reg        redirect_pending;
 reg [31:0] redirect_target;
@@ -142,7 +152,10 @@ wire load_use_hazard =
     if_id_valid && id_ex_valid && id_ex_mem_read && id_ex_wb_addr != 5'b0 &&
     ((id_uses_rs && id_rs == id_ex_wb_addr) || (id_uses_rt && id_rt == id_ex_wb_addr));
 
-wire fetch_response_now = bus_valid && bus_ready && bus_owner == BUS_IF;
+wire bus_fetch_response_now = bus_valid && bus_ready && bus_owner == BUS_IF;
+wire fetch_response_now = bus_fetch_response_now || icache_resp_valid;
+wire [31:0] fetch_response_pc = icache_resp_valid ? icache_resp_pc : if_req_pc;
+wire [31:0] fetch_response_inst = icache_resp_valid ? icache_resp_inst : bus_rdata;
 wire front_stall = mem_stall || load_use_hazard;
 wire id_advance = if_id_valid && !front_stall;
 wire if_id_can_accept = !front_stall && (!if_id_valid || id_advance);
@@ -152,13 +165,23 @@ wire fetch_buf_take = fetch_buf_valid && if_id_can_accept &&
                       (!redirect_pending || fetch_buf_pc == redirect_delay_pc) &&
                       (!control_taken_now || fetch_buf_pc == control_delay_pc_now);
 wire fetch_response_can_enqueue = fetch_response_now &&
-                                  (!redirect_pending || if_req_pc == redirect_delay_pc) &&
-                                  (!control_taken_now || if_req_pc == control_delay_pc_now);
+                                  (!redirect_pending || fetch_response_pc == redirect_delay_pc) &&
+                                  (!control_taken_now || fetch_response_pc == control_delay_pc_now);
+wire [5:0] fetch_buf_op = fetch_buf_inst[31:26];
+wire [5:0] fetch_buf_func = fetch_buf_inst[5:0];
+wire fetch_buf_is_control =
+    fetch_buf_valid &&
+    ((fetch_buf_op == 6'b000000 && (fetch_buf_func == 6'b001000 || fetch_buf_func == 6'b001001)) ||
+     fetch_buf_op == 6'b000001 || fetch_buf_op == 6'b000010 ||
+     fetch_buf_op == 6'b000011 || fetch_buf_op == 6'b000100 ||
+     fetch_buf_op == 6'b000101 || fetch_buf_op == 6'b000110 ||
+     fetch_buf_op == 6'b000111);
 wire redirect_fetch_after_delay = fetch_buf_take && (redirect_pending || control_taken_now);
 wire [31:0] redirect_fetch_pc =
     redirect_pending ? redirect_target : id_branch_target;
 wire stream_fetch_after_take = fetch_buf_take && !redirect_pending &&
-                               !control_taken_now && !fetch_spill_valid;
+                               !control_taken_now && !fetch_spill_valid &&
+                               !fetch_buf_is_control;
 wire bus_free_after_ready = !bus_valid || bus_ready;
 wire can_issue_ex_mem = bus_free_after_ready && (!mem_stage_needs_bus || mem_completes) &&
                         id_ex_needs_bus && !mem_stall;
@@ -170,6 +193,21 @@ wire can_issue_fetch = bus_free_after_ready && !fetch_response_now &&
                        !fetch_buf_valid && !fetch_spill_valid && !mem_blocks_fetch &&
                        if_id_can_accept && (!redirect_pending || fetch_pc == redirect_delay_pc) &&
                        (!control_taken_now || fetch_pc == control_delay_pc_now);
+wire fetch_issue_wants = can_issue_stream_fetch || can_issue_fetch;
+wire [31:0] fetch_issue_pc = fetch_pc;
+wire fetch_issue_cache_ok = !(if_id_valid && id_is_control) && !redirect_pending;
+wire fetch_issue_cacheable = fetch_issue_cache_ok &&
+                             fetch_issue_pc >= 32'h8010_0000 && fetch_issue_pc < 32'h8080_0000;
+wire [ICACHE_INDEX_BITS-1:0] fetch_issue_index =
+    fetch_issue_cache_ok ? fetch_issue_pc[ICACHE_TAG_LSB-1:2] : {ICACHE_INDEX_BITS{1'b0}};
+wire [31:ICACHE_TAG_LSB] fetch_issue_tag =
+    fetch_issue_cache_ok ? fetch_issue_pc[31:ICACHE_TAG_LSB] : {(32-ICACHE_TAG_LSB){1'b0}};
+wire fetch_issue_hit = fetch_issue_cacheable && icache_valid[fetch_issue_index] &&
+                       icache_tag[fetch_issue_index] == fetch_issue_tag;
+wire [31:0] fetch_issue_inst = icache_data[fetch_issue_index];
+wire [ICACHE_INDEX_BITS-1:0] if_req_index = if_req_pc[ICACHE_TAG_LSB-1:2];
+wire if_req_cacheable = if_req_pc >= 32'h8010_0000 && if_req_pc < 32'h8080_0000;
+wire [ICACHE_INDEX_BITS-1:0] ex_mem_addr_index = ex_mem_mem_addr[ICACHE_TAG_LSB-1:2];
 
 assign debug_pc = fetch_pc;
 
@@ -325,6 +363,10 @@ always @(posedge clk) begin
         fetch_spill_valid <= 1'b0;
         fetch_spill_pc <= 32'b0;
         fetch_spill_inst <= 32'b0;
+        icache_valid <= {ICACHE_LINES{1'b0}};
+        icache_resp_valid <= 1'b0;
+        icache_resp_pc <= 32'b0;
+        icache_resp_inst <= 32'b0;
         redirect_pending <= 1'b0;
         redirect_target <= 32'b0;
         redirect_delay_pc <= 32'b0;
@@ -382,18 +424,27 @@ always @(posedge clk) begin
         end
         gpr[0] <= 32'b0;
 
+        if (fetch_response_now) begin
+            if (fetch_response_can_enqueue && !fetch_buf_take) begin
+                if (fetch_buf_valid && !fetch_spill_valid) begin
+                    fetch_spill_valid <= 1'b1;
+                    fetch_spill_pc <= fetch_response_pc;
+                    fetch_spill_inst <= fetch_response_inst;
+                end else if (!fetch_buf_valid) begin
+                    fetch_buf_valid <= 1'b1;
+                    fetch_buf_pc <= fetch_response_pc;
+                    fetch_buf_inst <= fetch_response_inst;
+                end
+            end
+            icache_resp_valid <= 1'b0;
+        end
+
         if (bus_valid && bus_ready) begin
             if (bus_owner == BUS_IF) begin
-                if (fetch_response_can_enqueue && !fetch_buf_take) begin
-                    if (fetch_buf_valid && !fetch_spill_valid) begin
-                        fetch_spill_valid <= 1'b1;
-                        fetch_spill_pc <= if_req_pc;
-                        fetch_spill_inst <= bus_rdata;
-                    end else if (!fetch_buf_valid) begin
-                        fetch_buf_valid <= 1'b1;
-                        fetch_buf_pc <= if_req_pc;
-                        fetch_buf_inst <= bus_rdata;
-                    end
+                if (if_req_cacheable) begin
+                    icache_data[if_req_index] <= bus_rdata;
+                    icache_tag[if_req_index] <= if_req_pc[31:ICACHE_TAG_LSB];
+                    icache_valid[if_req_index] <= 1'b1;
                 end
             end
             bus_valid <= 1'b0;
@@ -458,7 +509,7 @@ always @(posedge clk) begin
                     redirect_delay_pc <= if_id_pc + 32'd4;
                     fetch_pc <= if_id_pc + 32'd4;
                     if ((fetch_buf_valid && fetch_buf_pc != if_id_pc + 32'd4) ||
-                        (bus_valid && bus_ready && bus_owner == BUS_IF && if_req_pc != if_id_pc + 32'd4)) begin
+                        (fetch_response_now && fetch_response_pc != if_id_pc + 32'd4)) begin
                         if (fetch_spill_valid && fetch_spill_pc == if_id_pc + 32'd4) begin
                             fetch_buf_valid <= 1'b1;
                             fetch_buf_pc <= fetch_spill_pc;
@@ -489,15 +540,15 @@ always @(posedge clk) begin
                             fetch_buf_inst <= fetch_spill_inst;
                             if (fetch_response_can_enqueue) begin
                                 fetch_spill_valid <= 1'b1;
-                                fetch_spill_pc <= if_req_pc;
-                                fetch_spill_inst <= bus_rdata;
+                                fetch_spill_pc <= fetch_response_pc;
+                                fetch_spill_inst <= fetch_response_inst;
                             end else begin
                                 fetch_spill_valid <= 1'b0;
                             end
                         end else if (fetch_response_can_enqueue) begin
                             fetch_buf_valid <= 1'b1;
-                            fetch_buf_pc <= if_req_pc;
-                            fetch_buf_inst <= bus_rdata;
+                            fetch_buf_pc <= fetch_response_pc;
+                            fetch_buf_inst <= fetch_response_inst;
                             fetch_spill_valid <= 1'b0;
                         end else begin
                             fetch_buf_valid <= 1'b0;
@@ -518,6 +569,9 @@ always @(posedge clk) begin
             bus_addr <= ex_mem_mem_addr;
             bus_wdata <= mem_store_data;
             mem_active <= 1'b1;
+            if (ex_mem_mem_write) begin
+                icache_valid[ex_mem_addr_index] <= 1'b0;
+            end
         end else if (can_issue_ex_mem) begin
             bus_valid <= 1'b1;
             bus_owner <= BUS_MEM;
@@ -535,24 +589,21 @@ always @(posedge clk) begin
             bus_wdata <= 32'b0;
             if_req_pc <= redirect_fetch_pc;
             fetch_pc <= redirect_fetch_pc + 32'd4;
-        end else if (can_issue_stream_fetch) begin
-            bus_valid <= 1'b1;
+        end else if (fetch_issue_wants) begin
             bus_owner <= BUS_IF;
             bus_write <= 1'b0;
             bus_size <= SIZE_WORD;
-            bus_addr <= fetch_pc;
+            bus_addr <= fetch_issue_pc;
             bus_wdata <= 32'b0;
-            if_req_pc <= fetch_pc;
-            fetch_pc <= fetch_pc + 32'd4;
-        end else if (can_issue_fetch) begin
-            bus_valid <= 1'b1;
-            bus_owner <= BUS_IF;
-            bus_write <= 1'b0;
-            bus_size <= SIZE_WORD;
-            bus_addr <= fetch_pc;
-            bus_wdata <= 32'b0;
-            if_req_pc <= fetch_pc;
-            fetch_pc <= fetch_pc + 32'd4;
+            if_req_pc <= fetch_issue_pc;
+            fetch_pc <= fetch_issue_pc + 32'd4;
+            if (fetch_issue_hit) begin
+                icache_resp_valid <= 1'b1;
+                icache_resp_pc <= fetch_issue_pc;
+                icache_resp_inst <= fetch_issue_inst;
+            end else begin
+                bus_valid <= 1'b1;
+            end
         end
     end
 end
