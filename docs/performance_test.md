@@ -61,7 +61,7 @@ funct  = 000010
 ## 官方测试流程
 
 1. 将拨码开关设置为 0。
-2. 将性能测试包中的 `kernel (1).bin` 下载到 BaseRAM 起始位置，即物理地址 `0x00000000`。
+2. 将 `kernel.bin` 下载到 BaseRAM 起始位置，即物理地址 `0x00000000`。
 3. 打开串口终端，参数为 9600、8N1。
 4. 单击复位按钮。
 5. 等待 Kernel 输出欢迎信息。
@@ -71,8 +71,14 @@ funct  = 000010
 性能测试发布包：
 
 ```text
-/home/luoshuang/下载/kernel (1).bin
+/home/luoshuang/下载/kernel.bin
 /home/luoshuang/下载/supervisor_mips (1).zip
+```
+
+重复下载得到的另一个 Kernel 文件与 `kernel.bin` 内容完全一致，大小均为 12852 字节，SHA256 均为：
+
+```text
+05d4a1f5d57839a5aeedc1457a61759cb8e0e915e2f3d50d9c5c1a3fd9767e87
 ```
 
 ## Kernel 内置高负载程序
@@ -117,16 +123,16 @@ make -C sim kernel-perf
 make -C sim soc-system-perf
 ```
 
-如果需要覆盖真实 9600 串口路径，仍使用：
+如果需要覆盖真实 9600 串口路径，运行：
 
 ```sh
-make -C sim soc-system-real-uart KERNEL_C3_BIN='/home/luoshuang/下载/kernel (1).bin'
+make -C sim soc-system-real-uart
 ```
 
 ## 远程平台操作要点
 
 - bitstream 使用最新生成的 `run_vivado/project/thinpad_top.runs/impl_1/thinpad_top.bit`。
-- Flash/RAM 写入时选择 BaseRAM，起始地址填 `00000000`，文件选择 `/home/luoshuang/下载/kernel (1).bin`。
+- Flash/RAM 写入时选择 BaseRAM，起始地址填 `00000000`，文件选择 `/home/luoshuang/下载/kernel.bin`。
 - 拨码开关全部拨到 0。
 - 串口终端必须在复位前打开，波特率选择 9600。
 - 复位后应看到 `MONITOR for MIPS32 - initialized.`。
