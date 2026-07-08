@@ -57,6 +57,7 @@ reg [31:0] redirect_delay_pc;
 reg        if_id_valid;
 reg [31:0] if_id_pc;
 reg [31:0] if_id_inst;
+reg        if_id_pred_taken;
 
 reg        id_ex_valid;
 reg [31:0] id_ex_pc;
@@ -161,6 +162,8 @@ wire id_advance = if_id_valid && !front_stall;
 wire if_id_can_accept = !front_stall && (!if_id_valid || id_advance);
 wire control_taken_now = if_id_valid && !front_stall && id_is_control && id_branch_taken;
 wire [31:0] control_delay_pc_now = if_id_pc + 32'd4;
+wire control_pred_miss_now =
+    if_id_valid && !front_stall && id_is_control && if_id_pred_taken && !id_branch_taken;
 wire fetch_buf_take = fetch_buf_valid && if_id_can_accept &&
                       (!redirect_pending || fetch_buf_pc == redirect_delay_pc) &&
                       (!control_taken_now || fetch_buf_pc == control_delay_pc_now);
@@ -176,12 +179,22 @@ wire fetch_buf_is_control =
      fetch_buf_op == 6'b000011 || fetch_buf_op == 6'b000100 ||
      fetch_buf_op == 6'b000101 || fetch_buf_op == 6'b000110 ||
      fetch_buf_op == 6'b000111);
-wire redirect_fetch_after_delay = fetch_buf_take && (redirect_pending || control_taken_now);
+wire fetch_buf_is_cond_branch =
+    fetch_buf_valid &&
+    (fetch_buf_op == 6'b000001 || fetch_buf_op == 6'b000100 ||
+     fetch_buf_op == 6'b000101 || fetch_buf_op == 6'b000110 ||
+     fetch_buf_op == 6'b000111);
+wire fetch_buf_predict_taken = fetch_buf_is_cond_branch && fetch_buf_inst[15];
+wire [31:0] fetch_buf_predict_target =
+    fetch_buf_pc + 32'd4 + {{14{fetch_buf_inst[15]}}, fetch_buf_inst[15:0], 2'b00};
+wire redirect_action_now = redirect_pending || control_taken_now;
+wire redirect_fetch_after_delay = fetch_buf_take && redirect_action_now;
 wire [31:0] redirect_fetch_pc =
-    redirect_pending ? redirect_target : id_branch_target;
+    control_pred_miss_now ? if_id_pc + 32'd8 :
+    (redirect_pending ? redirect_target : id_branch_target);
 wire stream_fetch_after_take = fetch_buf_take && !redirect_pending &&
                                !control_taken_now && !fetch_spill_valid &&
-                               !fetch_buf_is_control;
+                               (!fetch_buf_is_control || fetch_buf_predict_taken);
 wire bus_free_after_ready = !bus_valid || bus_ready;
 wire can_issue_ex_mem = bus_free_after_ready && (!mem_stage_needs_bus || mem_completes) &&
                         id_ex_needs_bus && !mem_stall;
@@ -373,6 +386,7 @@ always @(posedge clk) begin
         if_id_valid <= 1'b0;
         if_id_pc <= 32'b0;
         if_id_inst <= 32'b0;
+        if_id_pred_taken <= 1'b0;
         id_ex_valid <= 1'b0;
         id_ex_pc <= 32'b0;
         id_ex_op <= 6'b0;
@@ -503,9 +517,9 @@ always @(posedge clk) begin
                 id_ex_mem_size <= id_mem_size;
                 id_ex_mem_signed <= id_mem_signed;
 
-                if (if_id_valid && id_is_control && id_branch_taken) begin
+                if (if_id_valid && id_is_control && (id_branch_taken || if_id_pred_taken)) begin
                     redirect_pending <= 1'b1;
-                    redirect_target <= id_branch_target;
+                    redirect_target <= id_branch_taken ? id_branch_target : if_id_pc + 32'd8;
                     redirect_delay_pc <= if_id_pc + 32'd4;
                     fetch_pc <= if_id_pc + 32'd4;
                     if ((fetch_buf_valid && fetch_buf_pc != if_id_pc + 32'd4) ||
@@ -528,12 +542,19 @@ always @(posedge clk) begin
                     if_id_valid <= 1'b1;
                     if_id_pc <= fetch_buf_pc;
                     if_id_inst <= fetch_buf_inst;
-                    if (redirect_pending || control_taken_now) begin
+                    if_id_pred_taken <= fetch_buf_predict_taken && !redirect_pending && !control_taken_now;
+                    if (redirect_action_now) begin
                         fetch_buf_valid <= 1'b0;
                         fetch_spill_valid <= 1'b0;
-                        fetch_pc <= redirect_pending ? redirect_target : id_branch_target;
+                        fetch_pc <= redirect_fetch_pc;
                         redirect_pending <= 1'b0;
                     end else begin
+                        if (fetch_buf_predict_taken && !redirect_pending && !control_taken_now) begin
+                            redirect_pending <= 1'b1;
+                            redirect_target <= fetch_buf_predict_target;
+                            redirect_delay_pc <= fetch_buf_pc + 32'd4;
+                            fetch_pc <= fetch_buf_pc + 32'd4;
+                        end
                         if (fetch_spill_valid) begin
                             fetch_buf_valid <= 1'b1;
                             fetch_buf_pc <= fetch_spill_pc;
@@ -557,6 +578,7 @@ always @(posedge clk) begin
                     end
                 end else if (if_id_valid) begin
                     if_id_valid <= 1'b0;
+                    if_id_pred_taken <= 1'b0;
                 end
             end
         end
