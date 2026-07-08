@@ -53,8 +53,10 @@ perf-matrix: $(CORE_EXE) ../asm/perf-matrix.bin
 kernel-c3: $(CORE_EXE) ../asm/c3-user.bin
 	TRACE=$(TRACE) $(CORE_EXE) "$(KERNEL_C3_BIN)" ../asm/c3-user.bin
 
-kernel-perf: $(CORE_EXE) ../asm/c3-user.bin
-	TRACE=$(TRACE) $(CORE_EXE) "$(KERNEL_C3_BIN)" ../asm/c3-user.bin
+kernel-perf: $(CORE_EXE) ../asm/perf-matrix.bin
+	unzip -p /home/luoshuang/下载/supervisor_mips.zip supervisor_mips/utility/matrix.in > /tmp/matrix.in
+	unzip -p /home/luoshuang/下载/supervisor_mips.zip supervisor_mips/utility/matrix.out > /tmp/matrix.out
+	TRACE=$(TRACE) $(CORE_EXE) "$(KERNEL_C3_BIN)" ../asm/perf-matrix.bin
 
 soc-bus: $(BUS_EXE)
 	$(BUS_EXE)

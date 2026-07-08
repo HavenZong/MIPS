@@ -49,8 +49,6 @@ reg        id_ex_valid;
 reg [31:0] id_ex_pc;
 reg [5:0]  id_ex_op;
 reg [5:0]  id_ex_func;
-reg [31:0] id_ex_rs_value;
-reg [31:0] id_ex_rt_value;
 reg [4:0]  id_ex_rs;
 reg [4:0]  id_ex_rt;
 reg [4:0]  id_ex_sa;
@@ -73,6 +71,7 @@ reg [1:0]  ex_mem_mem_size;
 reg        ex_mem_mem_signed;
 reg [31:0] ex_mem_mem_addr;
 reg [31:0] ex_mem_store_data;
+reg [4:0]  ex_mem_store_rt;
 
 reg        mem_active;
 
@@ -120,6 +119,7 @@ reg [31:0] ex_rs_value;
 reg [31:0] ex_rt_value;
 reg [31:0] ex_alu_result;
 reg [31:0] ex_store_data;
+reg [31:0] mem_store_data;
 
 wire [7:0] mem_load_byte =
     (ex_mem_mem_addr[1:0] == 2'b00) ? bus_rdata[7:0] :
@@ -145,8 +145,7 @@ wire [31:0] control_delay_pc_now = if_id_pc + 32'd4;
 wire fetch_buf_take = fetch_buf_valid && if_id_can_accept &&
                       (!redirect_pending || fetch_buf_pc == redirect_delay_pc) &&
                       (!control_taken_now || fetch_buf_pc == control_delay_pc_now);
-wire bus_free_after_ready = !bus_valid || bus_ready;
-wire can_issue_fetch = bus_free_after_ready && !fetch_buf_valid && !mem_stage_needs_bus &&
+wire can_issue_fetch = !bus_valid && !fetch_buf_valid && !mem_stage_needs_bus &&
                        if_id_can_accept && (!redirect_pending || fetch_pc == redirect_delay_pc) &&
                        (!control_taken_now || fetch_pc == control_delay_pc_now);
 
@@ -220,8 +219,8 @@ always @(*) begin
 end
 
 always @(*) begin
-    ex_rs_value = id_ex_rs_value;
-    ex_rt_value = id_ex_rt_value;
+    ex_rs_value = (id_ex_rs == 5'd0) ? 32'b0 : gpr[id_ex_rs];
+    ex_rt_value = (id_ex_rt == 5'd0) ? 32'b0 : gpr[id_ex_rt];
 
     if (ex_mem_valid && ex_mem_wb_en && !ex_mem_mem_read && ex_mem_wb_addr != 5'b0 && ex_mem_wb_addr == id_ex_rs) begin
         ex_rs_value = ex_mem_wb_data;
@@ -233,6 +232,16 @@ always @(*) begin
         ex_rt_value = ex_mem_wb_data;
     end else if (mem_wb_valid && mem_wb_wb_en && mem_wb_wb_addr != 5'b0 && mem_wb_wb_addr == id_ex_rt) begin
         ex_rt_value = mem_wb_wb_data;
+    end
+end
+
+always @(*) begin
+    mem_store_data = ex_mem_store_data;
+    if (ex_mem_mem_write && ex_mem_store_rt != 5'b0) begin
+        mem_store_data = gpr[ex_mem_store_rt];
+        if (mem_wb_valid && mem_wb_wb_en && mem_wb_wb_addr == ex_mem_store_rt) begin
+            mem_store_data = mem_wb_wb_data;
+        end
     end
 end
 
@@ -301,8 +310,6 @@ always @(posedge clk) begin
         id_ex_pc <= 32'b0;
         id_ex_op <= 6'b0;
         id_ex_func <= 6'b0;
-        id_ex_rs_value <= 32'b0;
-        id_ex_rt_value <= 32'b0;
         id_ex_rs <= 5'b0;
         id_ex_rt <= 5'b0;
         id_ex_sa <= 5'b0;
@@ -324,6 +331,7 @@ always @(posedge clk) begin
         ex_mem_mem_signed <= 1'b0;
         ex_mem_mem_addr <= 32'b0;
         ex_mem_store_data <= 32'b0;
+        ex_mem_store_rt <= 5'b0;
         mem_active <= 1'b0;
         mem_wb_valid <= 1'b0;
         mem_wb_pc <= 32'b0;
@@ -387,6 +395,7 @@ always @(posedge clk) begin
             ex_mem_mem_signed <= id_ex_mem_signed;
             ex_mem_mem_addr <= ex_alu_result;
             ex_mem_store_data <= ex_store_data;
+            ex_mem_store_rt <= id_ex_rt;
 
             if (load_use_hazard) begin
                 id_ex_valid <= 1'b0;
@@ -398,8 +407,6 @@ always @(posedge clk) begin
                 id_ex_pc <= if_id_pc;
                 id_ex_op <= id_op;
                 id_ex_func <= id_func;
-                id_ex_rs_value <= id_rs_value;
-                id_ex_rt_value <= id_rt_value;
                 id_ex_rs <= id_rs;
                 id_ex_rt <= id_rt;
                 id_ex_sa <= id_sa;
@@ -447,7 +454,7 @@ always @(posedge clk) begin
             bus_write <= ex_mem_mem_write;
             bus_size <= ex_mem_mem_size;
             bus_addr <= ex_mem_mem_addr;
-            bus_wdata <= ex_mem_store_data;
+            bus_wdata <= mem_store_data;
             mem_active <= 1'b1;
         end else if (can_issue_fetch) begin
             bus_valid <= 1'b1;

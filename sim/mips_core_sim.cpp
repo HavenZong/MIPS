@@ -18,6 +18,7 @@ const uint32_t kUartDataAddr = 0xbfd003f8u;
 const uint32_t kUartStatusAddr = 0xbfd003fcu;
 const uint32_t kUserBase = 0x80100000u;
 const uint32_t kUserDataBase = 0x80400000u;
+const uint32_t kMatrixOutBase = 0x80420000u;
 const char kMatrixInPath[] = "/tmp/matrix.in";
 const char kMatrixOutPath[] = "/tmp/matrix.out";
 const char kMonitorWelcome[] = "MONITOR for MIPS32 - initialized.";
@@ -149,13 +150,17 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    std::string c3_user_path = kernel_c3_mode ? std::string(argv[2]) : std::string();
+    bool kernel_matrix_mode = kernel_c3_mode && c3_user_path.find("perf-matrix") != std::string::npos;
 
     std::vector<uint8_t> mem(kMemSize, 0);
     load_bin(mem, argv[1], kResetPc);
     std::string program(argv[1]);
-    bool perf_matrix_mode = program.find("perf-matrix") != std::string::npos;
+    bool perf_matrix_mode = program.find("perf-matrix") != std::string::npos || kernel_matrix_mode;
+    std::vector<uint32_t> matrix_expected;
     if (perf_matrix_mode) {
         load_hex_words(mem, kMatrixInPath, kUserDataBase);
+        matrix_expected = read_hex_words(kMatrixOutPath);
     }
 
     Vmips_core dut;
@@ -175,6 +180,7 @@ int main(int argc, char** argv) {
     std::vector<uint8_t> kernel_response;
     bool c3_script_loaded = false;
     bool c3_pass = false;
+    bool matrix_pass = false;
 
     for (int i = 0; i < 5; ++i) {
         tick(dut);
@@ -184,7 +190,8 @@ int main(int argc, char** argv) {
     uint32_t last_wb_pc = 0xffffffffu;
     int same_pc_count = 0;
 
-    uint64_t max_cycles = kernel_c3_mode ? 20000000ull :
+    uint64_t max_cycles = kernel_matrix_mode ? 200000000ull :
+                          kernel_c3_mode ? 20000000ull :
                           perf_matrix_mode ? 100000000ull :
                           20000ull;
     for (uint64_t cycle = 0; cycle < max_cycles; ++cycle) {
@@ -279,16 +286,62 @@ int main(int argc, char** argv) {
             uart_rx.push_back('G');
             append_u32_le(uart_rx, kUserBase);
 
-            uart_rx.push_back('R');
+            if (kernel_matrix_mode) {
+                uart_rx.push_back('D');
+                append_u32_le(uart_rx, kMatrixOutBase);
+                append_u32_le(uart_rx, 147456u);
+            } else {
+                uart_rx.push_back('R');
 
-            uart_rx.push_back('D');
-            append_u32_le(uart_rx, kUserDataBase);
-            append_u32_le(uart_rx, 4);
+                uart_rx.push_back('D');
+                append_u32_le(uart_rx, kUserDataBase);
+                append_u32_le(uart_rx, 4);
+            }
 
             c3_script_loaded = true;
         }
 
-        if (kernel_c3_mode && c3_script_loaded) {
+        if ((kernel_matrix_mode && c3_script_loaded) || (perf_matrix_mode && !kernel_c3_mode)) {
+            bool bare_matrix_returned = perf_matrix_mode && !kernel_c3_mode && dut.debug_pc < kResetPc;
+            if (!bare_matrix_returned && (cycle & 0xfffull) != 0 && cycle + 1u != max_cycles) {
+                continue;
+            }
+            bool done = true;
+            bool any_nonzero = false;
+            bool ok = true;
+            for (size_t i = 0; i < matrix_expected.size(); ++i) {
+                uint32_t actual = load_word(mem, kMatrixOutBase + static_cast<uint32_t>(i * 4u));
+                if (actual != 0) {
+                    any_nonzero = true;
+                }
+                if (actual != matrix_expected[i]) {
+                    done = false;
+                    ok = false;
+                    break;
+                }
+            }
+            if (ok && any_nonzero) {
+                std::printf("%s matrix memory check passed\n",
+                            kernel_matrix_mode ? "kernel-perf" : "perf-matrix");
+                matrix_pass = true;
+                break;
+            }
+            if (cycle + 1u == max_cycles && !done) {
+                for (size_t i = 0; i < matrix_expected.size(); ++i) {
+                    uint32_t actual = load_word(mem, kMatrixOutBase + static_cast<uint32_t>(i * 4u));
+                    if (actual != matrix_expected[i]) {
+                        std::fprintf(stderr,
+                                     "%s matrix mismatch at word %zu addr=%08x actual=%08x expected=%08x\n",
+                                     kernel_matrix_mode ? "kernel-perf" : "perf-matrix",
+                                     i,
+                                     kMatrixOutBase + static_cast<uint32_t>(i * 4u),
+                                     actual,
+                                     matrix_expected[i]);
+                        break;
+                    }
+                }
+            }
+        } else if (kernel_c3_mode && c3_script_loaded) {
             size_t welcome_len = sizeof(kMonitorWelcome) - 1u;
             if (uart_tx.size() > welcome_len) {
                 kernel_response.assign(uart_tx.begin() + welcome_len, uart_tx.end());
@@ -337,6 +390,14 @@ int main(int argc, char** argv) {
     }
 
     if (kernel_c3_mode) {
+        if (kernel_matrix_mode) {
+            if (!matrix_pass) {
+                std::fprintf(stderr, "kernel-perf matrix check timed out, tx=%zu pc=%08x\n",
+                             uart_tx.size(), dut.debug_pc);
+                return 1;
+            }
+            return 0;
+        }
         if (!c3_pass) {
             std::fprintf(stderr, "kernel-c3 monitor check timed out, tx=%zu pc=%08x\n",
                          uart_tx.size(), dut.debug_pc);
@@ -382,18 +443,19 @@ int main(int argc, char** argv) {
     }
 
     if (perf_matrix_mode) {
-        std::vector<uint32_t> expected = read_hex_words(kMatrixOutPath);
-        const uint32_t kMatrixCBase = 0x80420000u;
+        if (matrix_pass) {
+            return 0;
+        }
         bool ok = true;
-        for (size_t i = 0; i < expected.size(); ++i) {
-            uint32_t actual = load_word(mem, kMatrixCBase + static_cast<uint32_t>(i * 4u));
-            if (actual != expected[i]) {
+        for (size_t i = 0; i < matrix_expected.size(); ++i) {
+            uint32_t actual = load_word(mem, kMatrixOutBase + static_cast<uint32_t>(i * 4u));
+            if (actual != matrix_expected[i]) {
                 std::fprintf(stderr,
                              "perf-matrix mismatch at word %zu addr=%08x actual=%08x expected=%08x\n",
                              i,
-                             kMatrixCBase + static_cast<uint32_t>(i * 4u),
+                             kMatrixOutBase + static_cast<uint32_t>(i * 4u),
                              actual,
-                             expected[i]);
+                             matrix_expected[i]);
                 ok = false;
                 break;
             }

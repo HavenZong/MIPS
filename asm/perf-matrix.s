@@ -50,5 +50,5 @@ loop2end:
 
 loop1end:
 halt:
-    j       halt
-    ori     $zero, $zero, 0
+    jr      $ra
+    sll     $zero, $zero, 0
