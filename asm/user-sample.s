@@ -24,4 +24,3 @@ loop:
 
     jr    $ra
     ori   $zero, $zero, 0 # nop
-

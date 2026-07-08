@@ -22,4 +22,3 @@ all: $(BINS)
 
 %.o: %.s
 	$(CC) $(CFLAGS) -x assembler-with-cpp -c -o $@ $^
-
