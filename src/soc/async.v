@@ -16,8 +16,8 @@ module async_transmitter(
 	input wire reset,
 	input wire TxD_start,
 	input wire [7:0] TxD_data,
-	output wire TxD,
-	output wire TxD_busy
+	output reg TxD,
+	output reg TxD_busy
 );
 
 // Assert TxD_start for (at least) one clock cycle to start transmission of TxD_data
@@ -30,50 +30,59 @@ parameter Baud = 115200;
 // 	if(ClkFrequency<Baud*8 && (ClkFrequency % Baud!=0)) ASSERTION_ERROR PARAMETER_OUT_OF_RANGE("Frequency incompatible with requested Baud rate");
 // endgenerate
 
-////////////////////////////////
+function integer log2(input integer v);
+begin
+	log2 = 0;
+	while ((1 << log2) < v) log2 = log2 + 1;
+end
+endfunction
+
 `ifdef SIMULATION
-wire BitTick = 1'b1;  // output one bit per clock cycle
+localparam integer BaudDivider = 1;
 `else
-wire BitTick;
-BaudTickGen #(ClkFrequency, Baud) tickgen(.clk(clk), .enable(TxD_busy), .tick(BitTick));
+localparam integer BaudDivider = (ClkFrequency + Baud / 2) / Baud;
 `endif
+localparam integer BaudCounterWidth = (log2(BaudDivider) < 1) ? 1 : log2(BaudDivider);
 
-reg [3:0] TxD_state = 0;
-wire TxD_ready = (TxD_state==0);
-assign TxD_busy = ~TxD_ready;
+reg [BaudCounterWidth-1:0] baud_count = 0;
+reg [3:0] bit_index = 0;
+reg [9:0] frame = 10'h3ff;
 
-reg [7:0] TxD_shift = 0;
 always @(posedge clk)
 begin
 	if(reset) begin
-		TxD_state <= 4'b0000;
-		TxD_shift <= 8'b0;
+		TxD <= 1'b1;
+		TxD_busy <= 1'b0;
+		baud_count <= {BaudCounterWidth{1'b0}};
+		bit_index <= 4'b0;
+		frame <= 10'h3ff;
+	end else if(!TxD_busy) begin
+		TxD <= 1'b1;
+		baud_count <= {BaudCounterWidth{1'b0}};
+		bit_index <= 4'b0;
+		if(TxD_start) begin
+			frame <= {1'b1, TxD_data, 1'b0};
+			TxD <= 1'b0;
+			TxD_busy <= 1'b1;
+		end
 	end else begin
-		if(TxD_ready & TxD_start)
-			TxD_shift <= TxD_data;
-		else
-		if(TxD_state[3] & BitTick)
-			TxD_shift <= (TxD_shift >> 1);
-
-		case(TxD_state)
-			4'b0000: if(TxD_start) TxD_state <= 4'b0100;
-			4'b0100: if(BitTick) TxD_state <= 4'b1000;  // start bit
-			4'b1000: if(BitTick) TxD_state <= 4'b1001;  // bit 0
-			4'b1001: if(BitTick) TxD_state <= 4'b1010;  // bit 1
-			4'b1010: if(BitTick) TxD_state <= 4'b1011;  // bit 2
-			4'b1011: if(BitTick) TxD_state <= 4'b1100;  // bit 3
-			4'b1100: if(BitTick) TxD_state <= 4'b1101;  // bit 4
-			4'b1101: if(BitTick) TxD_state <= 4'b1110;  // bit 5
-			4'b1110: if(BitTick) TxD_state <= 4'b1111;  // bit 6
-			4'b1111: if(BitTick) TxD_state <= 4'b0010;  // bit 7
-			4'b0010: if(BitTick) TxD_state <= 4'b0000;  // stop1
-			//4'b0011: if(BitTick) TxD_state <= 4'b0000;  // stop2
-			default: if(BitTick) TxD_state <= 4'b0000;
-		endcase
+		if(baud_count == BaudDivider - 1) begin
+			baud_count <= {BaudCounterWidth{1'b0}};
+			if(bit_index == 4'd9) begin
+				TxD <= 1'b1;
+				TxD_busy <= 1'b0;
+				bit_index <= 4'b0;
+				frame <= 10'h3ff;
+			end else begin
+				TxD <= frame[1];
+				frame <= {1'b1, frame[9:1]};
+				bit_index <= bit_index + 4'd1;
+			end
+		end else begin
+			baud_count <= baud_count + {{(BaudCounterWidth-1){1'b0}}, 1'b1};
+		end
 	end
 end
-
-assign TxD = (TxD_state<4) | (TxD_state[3] & TxD_shift[0]);  // put together the start, data and stop bits
 endmodule
 
 
