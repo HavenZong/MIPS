@@ -35,7 +35,7 @@ wire [3:0]  unused_wb_rf_wen;
 wire [4:0]  unused_wb_rf_wnum;
 wire [31:0] unused_wb_rf_wdata;
 `ifdef SIMULATION
-wire [1:0]  unused_debug_bus_owner;
+wire [2:0]  unused_debug_bus_owner;
 wire        unused_debug_fetch_issue_wants;
 wire        unused_debug_fetch_issue_hit;
 wire        unused_debug_dcache_mem_hit;

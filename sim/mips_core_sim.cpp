@@ -599,7 +599,7 @@ int main(int argc, char** argv) {
             }
         }
 
-        if (!kernel_c3_mode && same_pc_count > 100) {
+        if (!kernel_c3_mode && !perf_matrix_mode && !cryptonight_mode && same_pc_count > 100) {
             break;
         }
         if (cryptonight_mode && !kernel_c3_mode && dut.debug_pc < kResetPc) {
