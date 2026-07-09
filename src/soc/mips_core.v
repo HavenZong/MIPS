@@ -63,6 +63,8 @@ localparam integer ICACHE_TAG_LSB = ICACHE_INDEX_BITS + 2;
 localparam integer DCACHE_INDEX_BITS = 13;
 localparam integer DCACHE_LINES = (1 << DCACHE_INDEX_BITS);
 localparam integer DCACHE_TAG_LSB = DCACHE_INDEX_BITS + 3;
+localparam [31:0] CACHEABLE_LOW = 32'h8010_0000;
+localparam [31:0] CACHEABLE_HIGH = 32'h8080_0000;
 localparam DCACHE_PREFETCH_ENABLE = 1'b0;
 
 reg [31:0] gpr [0:31];
@@ -361,7 +363,7 @@ wire fetch_issue_wants = can_issue_stream_fetch || can_issue_fetch;
 wire [31:0] fetch_issue_pc = fetch_pc;
 wire fetch_issue_cache_ok = !(if_id_valid && id_is_control) && !redirect_pending;
 wire fetch_issue_cacheable = fetch_issue_cache_ok &&
-                             fetch_issue_pc >= 32'h8010_0000 && fetch_issue_pc < 32'h8080_0000;
+                             fetch_issue_pc >= CACHEABLE_LOW && fetch_issue_pc < CACHEABLE_HIGH;
 wire [ICACHE_INDEX_BITS-1:0] fetch_issue_index =
     fetch_issue_cache_ok ? fetch_issue_pc[ICACHE_TAG_LSB-1:2] : {ICACHE_INDEX_BITS{1'b0}};
 wire [31:ICACHE_TAG_LSB] fetch_issue_tag =
@@ -370,9 +372,28 @@ wire fetch_issue_hit = fetch_issue_cacheable && icache_valid[fetch_issue_index] 
                        icache_tag[fetch_issue_index] == fetch_issue_tag;
 wire [31:0] fetch_issue_inst = icache_data[fetch_issue_index];
 wire [ICACHE_INDEX_BITS-1:0] if_req_index = if_req_pc[ICACHE_TAG_LSB-1:2];
-wire if_req_cacheable = if_req_pc >= 32'h8010_0000 && if_req_pc < 32'h8080_0000;
+wire if_req_cacheable = if_req_pc >= CACHEABLE_LOW && if_req_pc < CACHEABLE_HIGH;
 wire [ICACHE_INDEX_BITS-1:0] ex_mem_addr_index = ex_mem_mem_addr[ICACHE_TAG_LSB-1:2];
+wire [31:ICACHE_TAG_LSB] ex_mem_addr_icache_tag = ex_mem_mem_addr[31:ICACHE_TAG_LSB];
+wire ex_mem_addr_icache_cacheable =
+    ex_mem_mem_addr >= CACHEABLE_LOW && ex_mem_mem_addr < CACHEABLE_HIGH;
+wire ex_mem_addr_icache_hit =
+    ex_mem_addr_icache_cacheable && icache_valid[ex_mem_addr_index] &&
+    icache_tag[ex_mem_addr_index] == ex_mem_addr_icache_tag;
+wire [ICACHE_INDEX_BITS-1:0] ex_alu_addr_icache_index = ex_alu_result[ICACHE_TAG_LSB-1:2];
+wire [31:ICACHE_TAG_LSB] ex_alu_addr_icache_tag = ex_alu_result[31:ICACHE_TAG_LSB];
+wire ex_alu_addr_icache_cacheable =
+    ex_alu_result >= CACHEABLE_LOW && ex_alu_result < CACHEABLE_HIGH;
+wire ex_alu_addr_icache_hit =
+    ex_alu_addr_icache_cacheable && icache_valid[ex_alu_addr_icache_index] &&
+    icache_tag[ex_alu_addr_icache_index] == ex_alu_addr_icache_tag;
 wire [ICACHE_INDEX_BITS-1:0] storeq_addr_icache_index = storeq_addr0[ICACHE_TAG_LSB-1:2];
+wire [31:ICACHE_TAG_LSB] storeq_addr_icache_tag = storeq_addr0[31:ICACHE_TAG_LSB];
+wire storeq_addr_icache_cacheable =
+    storeq_addr0 >= CACHEABLE_LOW && storeq_addr0 < CACHEABLE_HIGH;
+wire storeq_addr_icache_hit =
+    storeq_addr_icache_cacheable && icache_valid[storeq_addr_icache_index] &&
+    icache_tag[storeq_addr_icache_index] == storeq_addr_icache_tag;
 wire [DCACHE_INDEX_BITS-1:0] bus_dcache_index = bus_addr[DCACHE_TAG_LSB-1:3];
 wire bus_dcache_word = bus_addr[2];
 wire [1:0] bus_dcache_valid_bits = dcache_valid[{bus_dcache_index, 1'b0} +: 2];
@@ -753,7 +774,9 @@ always @(posedge clk) begin
             mem_wb_wb_data <= mem_load_value;
             mem_active <= 1'b0;
             if (mem_store_enqueue_complete) begin
-                icache_valid[ex_mem_addr_index] <= 1'b0;
+                if (ex_mem_addr_icache_hit) begin
+                    icache_valid[ex_mem_addr_index] <= 1'b0;
+                end
                 dcache_prefetch_valid <= 1'b0;
             end
         end else if (!mem_stall) begin
@@ -886,7 +909,9 @@ always @(posedge clk) begin
             bus_size <= storeq_size0;
             bus_addr <= storeq_addr0;
             bus_wdata <= storeq_data0;
-            icache_valid[storeq_addr_icache_index] <= 1'b0;
+            if (storeq_addr_icache_hit) begin
+                icache_valid[storeq_addr_icache_index] <= 1'b0;
+            end
         end else if (!bus_valid && mem_stage_needs_bus && !mem_active) begin
             bus_valid <= 1'b1;
             bus_owner <= BUS_MEM;
@@ -896,7 +921,9 @@ always @(posedge clk) begin
             bus_wdata <= mem_store_data;
             mem_active <= 1'b1;
             if (ex_mem_mem_write) begin
-                icache_valid[ex_mem_addr_index] <= 1'b0;
+                if (ex_mem_addr_icache_hit) begin
+                    icache_valid[ex_mem_addr_index] <= 1'b0;
+                end
             end
         end else if (can_issue_ex_mem) begin
             bus_valid <= 1'b1;
@@ -906,6 +933,9 @@ always @(posedge clk) begin
             bus_addr <= ex_alu_result;
             bus_wdata <= ex_store_data;
             mem_active <= 1'b1;
+            if (id_ex_mem_write && ex_alu_addr_icache_hit) begin
+                icache_valid[ex_alu_addr_icache_index] <= 1'b0;
+            end
         end else if (can_issue_redirect_fetch) begin
             bus_valid <= 1'b1;
             bus_owner <= BUS_IF;
