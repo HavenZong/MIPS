@@ -57,7 +57,7 @@ localparam BUS_IF   = 2'd1;
 localparam BUS_MEM  = 2'd2;
 localparam BUS_DCPF = 2'd3;
 
-localparam integer ICACHE_INDEX_BITS = 5;
+localparam integer ICACHE_INDEX_BITS = 11;
 localparam integer ICACHE_LINES = (1 << ICACHE_INDEX_BITS);
 localparam integer ICACHE_TAG_LSB = ICACHE_INDEX_BITS + 2;
 localparam integer DCACHE_INDEX_BITS = 10;
