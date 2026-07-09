@@ -60,6 +60,7 @@ reg [63:0] dcache_read_data;
 reg [31:DCACHE_TAG_LSB] dcache_read_tag;
 reg        dcache_prefetch_valid;
 reg [31:0] dcache_prefetch_addr;
+reg [1:0]  dcache_prefetch_bits;
 
 reg        redirect_pending;
 reg [31:0] redirect_target;
@@ -285,6 +286,10 @@ wire [1:0] bus_dcache_valid_bits = dcache_valid[{bus_dcache_index, 1'b0} +: 2];
 wire bus_dcache_cacheable = bus_addr >= 32'h8040_0000 && bus_addr < 32'h8080_0000;
 wire bus_mem_store_word = bus_write && bus_size == SIZE_WORD;
 wire [1:0] bus_dcache_word_valid = bus_dcache_word ? 2'b10 : 2'b01;
+wire [1:0] bus_dcache_fill_bits =
+    (dcache_read_tag == bus_addr[31:DCACHE_TAG_LSB]) ?
+    (bus_dcache_valid_bits | bus_dcache_word_valid) :
+    bus_dcache_word_valid;
 wire can_issue_dcache_prefetch = bus_free_after_ready && !fetch_response_now &&
                                  !mem_blocks_fetch && dcache_prefetch_valid;
 
@@ -479,6 +484,7 @@ always @(posedge clk) begin
         dcache_valid <= {(DCACHE_LINES*2){1'b0}};
         dcache_prefetch_valid <= 1'b0;
         dcache_prefetch_addr <= 32'b0;
+        dcache_prefetch_bits <= 2'b00;
         redirect_pending <= 1'b0;
         redirect_target <= 32'b0;
         redirect_delay_pc <= 32'b0;
@@ -584,16 +590,14 @@ always @(posedge clk) begin
                         bus_mem_store_word ? bus_dcache_word_valid : 2'b00;
                     dcache_prefetch_valid <= 1'b0;
                 end else begin
-                    dcache_valid[{bus_dcache_index, 1'b0} +: 2] <=
-                        (dcache_read_tag == bus_addr[31:DCACHE_TAG_LSB]) ?
-                        (bus_dcache_valid_bits | bus_dcache_word_valid) :
-                        bus_dcache_word_valid;
-                    dcache_prefetch_valid <= !bus_dcache_word;
+                    dcache_valid[{bus_dcache_index, 1'b0} +: 2] <= bus_dcache_fill_bits;
+                    dcache_prefetch_valid <= !bus_dcache_word && !bus_dcache_fill_bits[1];
                     dcache_prefetch_addr <= bus_addr + 32'h0000_0004;
+                    dcache_prefetch_bits <= bus_dcache_fill_bits;
                 end
             end else if (bus_owner == BUS_DCPF && bus_dcache_cacheable) begin
                 dcache_valid[{bus_dcache_index, 1'b0} +: 2] <=
-                    bus_dcache_valid_bits | bus_dcache_word_valid;
+                    dcache_prefetch_bits | bus_dcache_word_valid;
             end
             bus_valid <= 1'b0;
             bus_owner <= BUS_NONE;
