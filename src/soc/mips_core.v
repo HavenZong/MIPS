@@ -27,13 +27,14 @@ localparam SIZE_WORD = 2'b10;
 localparam BUS_NONE = 2'd0;
 localparam BUS_IF   = 2'd1;
 localparam BUS_MEM  = 2'd2;
+localparam BUS_DCPF = 2'd3;
 
 localparam integer ICACHE_INDEX_BITS = 5;
 localparam integer ICACHE_LINES = (1 << ICACHE_INDEX_BITS);
 localparam integer ICACHE_TAG_LSB = ICACHE_INDEX_BITS + 2;
 localparam integer DCACHE_INDEX_BITS = 10;
 localparam integer DCACHE_LINES = (1 << DCACHE_INDEX_BITS);
-localparam integer DCACHE_TAG_LSB = DCACHE_INDEX_BITS + 2;
+localparam integer DCACHE_TAG_LSB = DCACHE_INDEX_BITS + 3;
 
 reg [31:0] gpr [0:31];
 
@@ -52,11 +53,13 @@ reg [ICACHE_LINES-1:0] icache_valid;
 reg        icache_resp_valid;
 reg [31:0] icache_resp_pc;
 reg [31:0] icache_resp_inst;
-(* ram_style = "block" *) reg [31:0] dcache_data [0:DCACHE_LINES-1];
+(* ram_style = "block" *) reg [63:0] dcache_data [0:DCACHE_LINES-1];
 (* ram_style = "block" *) reg [31:DCACHE_TAG_LSB] dcache_tag [0:DCACHE_LINES-1];
-reg [DCACHE_LINES-1:0] dcache_valid;
-reg [31:0] dcache_read_data;
+reg [DCACHE_LINES*2-1:0] dcache_valid;
+reg [63:0] dcache_read_data;
 reg [31:DCACHE_TAG_LSB] dcache_read_tag;
+reg        dcache_prefetch_valid;
+reg [31:0] dcache_prefetch_addr;
 
 reg        redirect_pending;
 reg [31:0] redirect_target;
@@ -157,13 +160,16 @@ reg [4:0]  mul_wb_addr;
 reg [31:0] mul_wb_data;
 wire [31:0] mul_stage_product = mul_stage_a * mul_stage_b;
 
-wire [DCACHE_INDEX_BITS-1:0] dcache_mem_index = ex_mem_mem_addr[DCACHE_TAG_LSB-1:2];
+wire [DCACHE_INDEX_BITS-1:0] dcache_mem_index = ex_mem_mem_addr[DCACHE_TAG_LSB-1:3];
 wire [31:DCACHE_TAG_LSB] dcache_mem_tag = ex_mem_mem_addr[31:DCACHE_TAG_LSB];
+wire dcache_mem_word = ex_mem_mem_addr[2];
+wire [1:0] dcache_mem_valid_bits = dcache_valid[{dcache_mem_index, 1'b0} +: 2];
 wire dcache_mem_cacheable = ex_mem_mem_addr >= 32'h8040_0000 && ex_mem_mem_addr < 32'h8080_0000;
 wire dcache_mem_hit = ex_mem_valid && ex_mem_mem_read && dcache_mem_cacheable &&
-                      dcache_valid[dcache_mem_index] &&
+                      dcache_mem_valid_bits[dcache_mem_word] &&
                       dcache_read_tag == dcache_mem_tag;
-wire [31:0] mem_load_word = dcache_mem_hit ? dcache_read_data : bus_rdata;
+wire [31:0] dcache_mem_word_data = dcache_mem_word ? dcache_read_data[63:32] : dcache_read_data[31:0];
+wire [31:0] mem_load_word = dcache_mem_hit ? dcache_mem_word_data : bus_rdata;
 wire [7:0] mem_load_byte =
     (ex_mem_mem_addr[1:0] == 2'b00) ? mem_load_word[7:0] :
     (ex_mem_mem_addr[1:0] == 2'b01) ? mem_load_word[15:8] :
@@ -179,7 +185,7 @@ wire mem_completes = dcache_mem_hit || mem_bus_completes;
 wire mem_stall = mem_stage_needs_bus && !mem_completes;
 wire mem_blocks_fetch = mem_stage_needs_bus && !mem_completes;
 
-wire [DCACHE_INDEX_BITS-1:0] dcache_ex_index = ex_alu_result[DCACHE_TAG_LSB-1:2];
+wire [DCACHE_INDEX_BITS-1:0] dcache_ex_index = ex_alu_result[DCACHE_TAG_LSB-1:3];
 wire dcache_ex_cacheable = ex_alu_result >= 32'h8040_0000 && ex_alu_result < 32'h8080_0000;
 wire id_ex_needs_bus =
     id_ex_valid && (id_ex_mem_write || (id_ex_mem_read && !dcache_ex_cacheable));
@@ -273,9 +279,14 @@ wire [31:0] fetch_issue_inst = icache_data[fetch_issue_index];
 wire [ICACHE_INDEX_BITS-1:0] if_req_index = if_req_pc[ICACHE_TAG_LSB-1:2];
 wire if_req_cacheable = if_req_pc >= 32'h8010_0000 && if_req_pc < 32'h8080_0000;
 wire [ICACHE_INDEX_BITS-1:0] ex_mem_addr_index = ex_mem_mem_addr[ICACHE_TAG_LSB-1:2];
-wire [DCACHE_INDEX_BITS-1:0] bus_dcache_index = bus_addr[DCACHE_TAG_LSB-1:2];
+wire [DCACHE_INDEX_BITS-1:0] bus_dcache_index = bus_addr[DCACHE_TAG_LSB-1:3];
+wire bus_dcache_word = bus_addr[2];
+wire [1:0] bus_dcache_valid_bits = dcache_valid[{bus_dcache_index, 1'b0} +: 2];
 wire bus_dcache_cacheable = bus_addr >= 32'h8040_0000 && bus_addr < 32'h8080_0000;
 wire bus_mem_store_word = bus_write && bus_size == SIZE_WORD;
+wire [1:0] bus_dcache_word_valid = bus_dcache_word ? 2'b10 : 2'b01;
+wire can_issue_dcache_prefetch = bus_free_after_ready && !fetch_response_now &&
+                                 !mem_blocks_fetch && dcache_prefetch_valid;
 
 assign debug_pc = fetch_pc;
 
@@ -433,9 +444,14 @@ always @(posedge clk) begin
         dcache_read_tag <= dcache_tag[dcache_ex_index];
     end
 
-    if (bus_valid && bus_ready && bus_owner == BUS_MEM && bus_dcache_cacheable &&
+    if (bus_valid && bus_ready &&
+        (bus_owner == BUS_MEM || bus_owner == BUS_DCPF) && bus_dcache_cacheable &&
         (!bus_write || bus_mem_store_word)) begin
-        dcache_data[bus_dcache_index] <= bus_write ? bus_wdata : bus_rdata;
+        if (bus_dcache_word) begin
+            dcache_data[bus_dcache_index][63:32] <= bus_write ? bus_wdata : bus_rdata;
+        end else begin
+            dcache_data[bus_dcache_index][31:0] <= bus_write ? bus_wdata : bus_rdata;
+        end
         dcache_tag[bus_dcache_index] <= bus_addr[31:DCACHE_TAG_LSB];
     end
 end
@@ -460,7 +476,9 @@ always @(posedge clk) begin
         icache_resp_valid <= 1'b0;
         icache_resp_pc <= 32'b0;
         icache_resp_inst <= 32'b0;
-        dcache_valid <= {DCACHE_LINES{1'b0}};
+        dcache_valid <= {(DCACHE_LINES*2){1'b0}};
+        dcache_prefetch_valid <= 1'b0;
+        dcache_prefetch_addr <= 32'b0;
         redirect_pending <= 1'b0;
         redirect_target <= 32'b0;
         redirect_delay_pc <= 32'b0;
@@ -561,7 +579,21 @@ always @(posedge clk) begin
                     icache_valid[if_req_index] <= 1'b1;
                 end
             end else if (bus_owner == BUS_MEM && bus_dcache_cacheable) begin
-                dcache_valid[bus_dcache_index] <= !bus_write || bus_mem_store_word;
+                if (bus_write) begin
+                    dcache_valid[{bus_dcache_index, 1'b0} +: 2] <=
+                        bus_mem_store_word ? bus_dcache_word_valid : 2'b00;
+                    dcache_prefetch_valid <= 1'b0;
+                end else begin
+                    dcache_valid[{bus_dcache_index, 1'b0} +: 2] <=
+                        (dcache_read_tag == bus_addr[31:DCACHE_TAG_LSB]) ?
+                        (bus_dcache_valid_bits | bus_dcache_word_valid) :
+                        bus_dcache_word_valid;
+                    dcache_prefetch_valid <= !bus_dcache_word;
+                    dcache_prefetch_addr <= bus_addr + 32'h0000_0004;
+                end
+            end else if (bus_owner == BUS_DCPF && bus_dcache_cacheable) begin
+                dcache_valid[{bus_dcache_index, 1'b0} +: 2] <=
+                    bus_dcache_valid_bits | bus_dcache_word_valid;
             end
             bus_valid <= 1'b0;
             bus_owner <= BUS_NONE;
@@ -726,10 +758,8 @@ always @(posedge clk) begin
             if_req_pc <= redirect_fetch_pc;
             fetch_pc <= redirect_fetch_pc + 32'd4;
         end else if (fetch_issue_wants) begin
-            bus_owner <= BUS_IF;
             bus_write <= 1'b0;
             bus_size <= SIZE_WORD;
-            bus_addr <= fetch_issue_pc;
             bus_wdata <= 32'b0;
             if_req_pc <= fetch_issue_pc;
             fetch_pc <= fetch_issue_pc + 32'd4;
@@ -737,9 +767,21 @@ always @(posedge clk) begin
                 icache_resp_valid <= 1'b1;
                 icache_resp_pc <= fetch_issue_pc;
                 icache_resp_inst <= fetch_issue_inst;
+                bus_owner <= BUS_IF;
+                bus_addr <= fetch_issue_pc;
             end else begin
                 bus_valid <= 1'b1;
+                bus_owner <= BUS_IF;
+                bus_addr <= fetch_issue_pc;
             end
+        end else if (can_issue_dcache_prefetch) begin
+            bus_valid <= 1'b1;
+            bus_owner <= BUS_DCPF;
+            bus_write <= 1'b0;
+            bus_size <= SIZE_WORD;
+            bus_addr <= dcache_prefetch_addr;
+            bus_wdata <= 32'b0;
+            dcache_prefetch_valid <= 1'b0;
         end
     end
 end
