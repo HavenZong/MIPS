@@ -48,7 +48,7 @@ localparam BUS_IF   = 2'd1;
 localparam BUS_MEM  = 2'd2;
 localparam BUS_DCPF = 2'd3;
 
-localparam integer ICACHE_INDEX_BITS = 5;
+localparam integer ICACHE_INDEX_BITS = 6;
 localparam integer ICACHE_LINES = (1 << ICACHE_INDEX_BITS);
 localparam integer ICACHE_TAG_LSB = ICACHE_INDEX_BITS + 2;
 localparam integer DCACHE_INDEX_BITS = 10;
@@ -362,7 +362,10 @@ wire [31:0] fetch_issue_inst = icache_data[fetch_issue_index];
 wire [ICACHE_INDEX_BITS-1:0] if_req_index = if_req_pc[ICACHE_TAG_LSB-1:2];
 wire if_req_cacheable = if_req_pc >= 32'h8010_0000 && if_req_pc < 32'h8080_0000;
 wire [ICACHE_INDEX_BITS-1:0] ex_mem_addr_index = ex_mem_mem_addr[ICACHE_TAG_LSB-1:2];
+wire ex_mem_store_base = ex_mem_mem_addr >= 32'h8000_0000 && ex_mem_mem_addr < 32'h8040_0000;
 wire [ICACHE_INDEX_BITS-1:0] storeq_addr_icache_index = storeq_addr0[ICACHE_TAG_LSB-1:2];
+wire [ICACHE_INDEX_BITS-1:0] ex_alu_icache_index = ex_alu_result[ICACHE_TAG_LSB-1:2];
+wire ex_alu_store_base = ex_alu_result >= 32'h8000_0000 && ex_alu_result < 32'h8040_0000;
 wire [DCACHE_INDEX_BITS-1:0] bus_dcache_index = bus_addr[DCACHE_TAG_LSB-1:3];
 wire bus_dcache_word = bus_addr[2];
 wire [1:0] bus_dcache_valid_bits = dcache_valid[{bus_dcache_index, 1'b0} +: 2];
@@ -875,7 +878,11 @@ always @(posedge clk) begin
             bus_wdata <= mem_store_data;
             mem_active <= 1'b1;
             if (ex_mem_mem_write) begin
-                icache_valid[ex_mem_addr_index] <= 1'b0;
+                if (ex_mem_store_base) begin
+                    icache_valid <= {ICACHE_LINES{1'b0}};
+                end else begin
+                    icache_valid[ex_mem_addr_index] <= 1'b0;
+                end
             end
         end else if (can_issue_ex_mem) begin
             bus_valid <= 1'b1;
@@ -885,6 +892,13 @@ always @(posedge clk) begin
             bus_addr <= ex_alu_result;
             bus_wdata <= ex_store_data;
             mem_active <= 1'b1;
+            if (id_ex_mem_write) begin
+                if (ex_alu_store_base) begin
+                    icache_valid <= {ICACHE_LINES{1'b0}};
+                end else begin
+                    icache_valid[ex_alu_icache_index] <= 1'b0;
+                end
+            end
         end else if (can_issue_redirect_fetch) begin
             bus_valid <= 1'b1;
             bus_owner <= BUS_IF;
