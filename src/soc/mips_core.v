@@ -673,6 +673,10 @@ always @(posedge clk) begin
             store_buf_addr <= ex_mem_mem_addr;
             store_buf_data <= mem_store_data;
             store_buf_size <= ex_mem_mem_size;
+            if (dcache_mem_cacheable) begin
+                dcache_valid[{dcache_mem_index, 1'b0} +: 2] <= 2'b00;
+                dcache_prefetch_valid <= 1'b0;
+            end
             if (ex_mem_store_invalidates_icache) begin
                 icache_valid[ex_mem_addr_index] <= 1'b0;
             end
