@@ -57,7 +57,7 @@ localparam BUS_IF   = 2'd1;
 localparam BUS_MEM  = 2'd2;
 localparam BUS_DCPF = 2'd3;
 
-localparam integer ICACHE_INDEX_BITS = 11;
+localparam integer ICACHE_INDEX_BITS = 12;
 localparam integer ICACHE_LINES = (1 << ICACHE_INDEX_BITS);
 localparam integer ICACHE_TAG_LSB = ICACHE_INDEX_BITS + 2;
 localparam integer DCACHE_INDEX_BITS = 10;
@@ -335,8 +335,13 @@ wire fetch_buf_is_cond_branch =
     (fetch_buf_op == 6'b000001 || fetch_buf_op == 6'b000100 ||
      fetch_buf_op == 6'b000101 || fetch_buf_op == 6'b000110 ||
      fetch_buf_op == 6'b000111);
-wire fetch_buf_predict_taken = fetch_buf_is_cond_branch && fetch_buf_inst[15];
+wire fetch_buf_is_direct_jump =
+    fetch_buf_valid && (fetch_buf_op == 6'b000010 || fetch_buf_op == 6'b000011);
+wire fetch_buf_predict_taken =
+    fetch_buf_is_direct_jump || (fetch_buf_is_cond_branch && fetch_buf_inst[15]);
 wire [31:0] fetch_buf_predict_target =
+    fetch_buf_is_direct_jump ?
+    {fetch_buf_pc[31:28], fetch_buf_inst[25:0], 2'b00} :
     fetch_buf_pc + 32'd4 + {{14{fetch_buf_inst[15]}}, fetch_buf_inst[15:0], 2'b00};
 wire redirect_action_now = redirect_pending || control_taken_now;
 wire redirect_fetch_after_delay = fetch_buf_take && redirect_action_now;
