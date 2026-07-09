@@ -51,6 +51,15 @@ wire        unused_debug_dcache_prefetch_complete;
 wire        unused_debug_mem_store_complete;
 wire        unused_debug_mmio_or_base_load_complete;
 wire        unused_debug_mul_issue;
+wire        unused_debug_storeq_full_stall;
+wire        unused_debug_storeq_load_forward;
+wire        unused_debug_storeq_load_block;
+wire        unused_debug_storeq_drain_complete;
+wire        unused_debug_storeq_enqueue;
+wire        unused_debug_branch_resolved;
+wire        unused_debug_branch_pred_taken;
+wire        unused_debug_branch_pred_hit;
+wire        unused_debug_branch_unpred_taken;
 `endif
 
 mips_core #(
@@ -87,7 +96,16 @@ mips_core #(
     .debug_dcache_prefetch_complete(unused_debug_dcache_prefetch_complete),
     .debug_mem_store_complete(unused_debug_mem_store_complete),
     .debug_mmio_or_base_load_complete(unused_debug_mmio_or_base_load_complete),
-    .debug_mul_issue(unused_debug_mul_issue)
+    .debug_mul_issue(unused_debug_mul_issue),
+    .debug_storeq_full_stall(unused_debug_storeq_full_stall),
+    .debug_storeq_load_forward(unused_debug_storeq_load_forward),
+    .debug_storeq_load_block(unused_debug_storeq_load_block),
+    .debug_storeq_drain_complete(unused_debug_storeq_drain_complete),
+    .debug_storeq_enqueue(unused_debug_storeq_enqueue),
+    .debug_branch_resolved(unused_debug_branch_resolved),
+    .debug_branch_pred_taken(unused_debug_branch_pred_taken),
+    .debug_branch_pred_hit(unused_debug_branch_pred_hit),
+    .debug_branch_unpred_taken(unused_debug_branch_unpred_taken)
 `endif
 );
 

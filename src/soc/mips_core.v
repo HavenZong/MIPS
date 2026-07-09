@@ -36,7 +36,16 @@ module mips_core #(
     output wire        debug_dcache_prefetch_complete,
     output wire        debug_mem_store_complete,
     output wire        debug_mmio_or_base_load_complete,
-    output wire        debug_mul_issue
+    output wire        debug_mul_issue,
+    output wire        debug_storeq_full_stall,
+    output wire        debug_storeq_load_forward,
+    output wire        debug_storeq_load_block,
+    output wire        debug_storeq_drain_complete,
+    output wire        debug_storeq_enqueue,
+    output wire        debug_branch_resolved,
+    output wire        debug_branch_pred_taken,
+    output wire        debug_branch_pred_hit,
+    output wire        debug_branch_unpred_taken
 `endif
 );
 
@@ -406,6 +415,17 @@ assign debug_mem_store_complete =
 assign debug_mmio_or_base_load_complete =
     mem_bus_completes && ex_mem_mem_read && !dcache_mem_cacheable;
 assign debug_mul_issue = !mem_stall && !mul_pipe_block && id_ex_is_mul;
+assign debug_storeq_full_stall = mem_store_queueable && storeq_full && !storeq_drain_complete;
+assign debug_storeq_load_forward = mem_load_forward_complete;
+assign debug_storeq_load_block = storeq_load_block;
+assign debug_storeq_drain_complete = storeq_drain_complete;
+assign debug_storeq_enqueue = mem_store_enqueue_complete;
+assign debug_branch_resolved = if_id_valid && !front_stall && id_is_control;
+assign debug_branch_pred_taken = if_id_valid && !front_stall && id_is_control && if_id_pred_taken;
+assign debug_branch_pred_hit = if_id_valid && !front_stall && id_is_control &&
+                               if_id_pred_taken && id_branch_taken;
+assign debug_branch_unpred_taken = if_id_valid && !front_stall && id_is_control &&
+                                   !if_id_pred_taken && id_branch_taken;
 `endif
 
 always @(*) begin

@@ -129,7 +129,9 @@ struct PendingBus {
 struct PerfStats {
     uint64_t cycles = 0;
     uint64_t wb_writes = 0;
+    uint64_t fetch_requests = 0;
     uint64_t icache_hits = 0;
+    uint64_t icache_miss_issues = 0;
     uint64_t icache_misses = 0;
     uint64_t icache_wait_cycles = 0;
     uint64_t dcache_load_hits = 0;
@@ -137,14 +139,26 @@ struct PerfStats {
     uint64_t dcache_prefetches = 0;
     uint64_t dcache_prefetch_wait_cycles = 0;
     uint64_t stores = 0;
+    uint64_t bus_if_cycles = 0;
+    uint64_t bus_mem_cycles = 0;
+    uint64_t bus_dcpf_cycles = 0;
     uint64_t mem_wait_cycles = 0;
     uint64_t mmio_or_base_loads = 0;
     uint64_t mem_stall_cycles = 0;
     uint64_t load_use_stall_cycles = 0;
     uint64_t mul_issues = 0;
     uint64_t mul_stall_cycles = 0;
+    uint64_t storeq_full_stall_cycles = 0;
+    uint64_t storeq_load_forwards = 0;
+    uint64_t storeq_load_block_cycles = 0;
+    uint64_t storeq_drains = 0;
+    uint64_t storeq_enqueues = 0;
+    uint64_t branch_resolved = 0;
     uint64_t branch_taken = 0;
+    uint64_t branch_pred_taken = 0;
+    uint64_t branch_pred_hit = 0;
     uint64_t branch_pred_miss = 0;
+    uint64_t branch_unpred_taken = 0;
 };
 
 bool is_ext_ram(uint32_t addr) {
@@ -155,8 +169,10 @@ void print_perf_stats(const PerfStats& stats) {
     std::printf("perf-stats cycles=%llu wb_writes=%llu\n",
                 static_cast<unsigned long long>(stats.cycles),
                 static_cast<unsigned long long>(stats.wb_writes));
-    std::printf("perf-stats icache hit=%llu miss=%llu wait=%llu\n",
+    std::printf("perf-stats icache request=%llu hit=%llu miss_issue=%llu miss_complete=%llu wait=%llu\n",
+                static_cast<unsigned long long>(stats.fetch_requests),
                 static_cast<unsigned long long>(stats.icache_hits),
+                static_cast<unsigned long long>(stats.icache_miss_issues),
                 static_cast<unsigned long long>(stats.icache_misses),
                 static_cast<unsigned long long>(stats.icache_wait_cycles));
     std::printf("perf-stats dcache load_hit=%llu load_miss=%llu prefetch=%llu prefetch_wait=%llu\n",
@@ -164,10 +180,20 @@ void print_perf_stats(const PerfStats& stats) {
                 static_cast<unsigned long long>(stats.dcache_load_misses),
                 static_cast<unsigned long long>(stats.dcache_prefetches),
                 static_cast<unsigned long long>(stats.dcache_prefetch_wait_cycles));
+    std::printf("perf-stats bus if=%llu mem=%llu dcpf=%llu\n",
+                static_cast<unsigned long long>(stats.bus_if_cycles),
+                static_cast<unsigned long long>(stats.bus_mem_cycles),
+                static_cast<unsigned long long>(stats.bus_dcpf_cycles));
     std::printf("perf-stats memory stores=%llu mem_wait=%llu mmio_or_base_loads=%llu\n",
                 static_cast<unsigned long long>(stats.stores),
                 static_cast<unsigned long long>(stats.mem_wait_cycles),
                 static_cast<unsigned long long>(stats.mmio_or_base_loads));
+    std::printf("perf-stats storeq enqueue=%llu drain=%llu forward=%llu full_stall=%llu load_block=%llu\n",
+                static_cast<unsigned long long>(stats.storeq_enqueues),
+                static_cast<unsigned long long>(stats.storeq_drains),
+                static_cast<unsigned long long>(stats.storeq_load_forwards),
+                static_cast<unsigned long long>(stats.storeq_full_stall_cycles),
+                static_cast<unsigned long long>(stats.storeq_load_block_cycles));
     std::printf("perf-stats stalls mem=%llu load_use=%llu mul_issue=%llu mul=%llu branch_taken=%llu branch_pred_miss=%llu\n",
                 static_cast<unsigned long long>(stats.mem_stall_cycles),
                 static_cast<unsigned long long>(stats.load_use_stall_cycles),
@@ -175,6 +201,13 @@ void print_perf_stats(const PerfStats& stats) {
                 static_cast<unsigned long long>(stats.mul_stall_cycles),
                 static_cast<unsigned long long>(stats.branch_taken),
                 static_cast<unsigned long long>(stats.branch_pred_miss));
+    std::printf("perf-stats branch resolved=%llu pred_taken=%llu pred_hit=%llu pred_taken_wrong=%llu unpred_taken=%llu pred_wrong=%llu\n",
+                static_cast<unsigned long long>(stats.branch_resolved),
+                static_cast<unsigned long long>(stats.branch_pred_taken),
+                static_cast<unsigned long long>(stats.branch_pred_hit),
+                static_cast<unsigned long long>(stats.branch_pred_miss),
+                static_cast<unsigned long long>(stats.branch_unpred_taken),
+                static_cast<unsigned long long>(stats.branch_pred_miss + stats.branch_unpred_taken));
 }
 
 void tick(Vmips_core& dut) {
@@ -277,8 +310,11 @@ int main(int argc, char** argv) {
                 ++perf_stats.wb_writes;
             }
             if (dut.debug_fetch_issue_wants) {
+                ++perf_stats.fetch_requests;
                 if (dut.debug_fetch_issue_hit) {
                     ++perf_stats.icache_hits;
+                } else {
+                    ++perf_stats.icache_miss_issues;
                 }
             }
             if (dut.debug_dcache_mem_hit) {
@@ -317,7 +353,41 @@ int main(int argc, char** argv) {
             if (dut.debug_mmio_or_base_load_complete) {
                 ++perf_stats.mmio_or_base_loads;
             }
+            if (dut.debug_storeq_full_stall) {
+                ++perf_stats.storeq_full_stall_cycles;
+            }
+            if (dut.debug_storeq_load_forward) {
+                ++perf_stats.storeq_load_forwards;
+            }
+            if (dut.debug_storeq_load_block) {
+                ++perf_stats.storeq_load_block_cycles;
+            }
+            if (dut.debug_storeq_drain_complete) {
+                ++perf_stats.storeq_drains;
+            }
+            if (dut.debug_storeq_enqueue) {
+                ++perf_stats.storeq_enqueues;
+            }
+            if (dut.debug_branch_resolved) {
+                ++perf_stats.branch_resolved;
+            }
+            if (dut.debug_branch_pred_taken) {
+                ++perf_stats.branch_pred_taken;
+            }
+            if (dut.debug_branch_pred_hit) {
+                ++perf_stats.branch_pred_hit;
+            }
+            if (dut.debug_branch_unpred_taken) {
+                ++perf_stats.branch_unpred_taken;
+            }
             if (dut.bus_valid) {
+                if (dut.debug_bus_owner == 1) {
+                    ++perf_stats.bus_if_cycles;
+                } else if (dut.debug_bus_owner == 2) {
+                    ++perf_stats.bus_mem_cycles;
+                } else if (dut.debug_bus_owner == 3) {
+                    ++perf_stats.bus_dcpf_cycles;
+                }
                 if (!dut.bus_ready) {
                     if (dut.debug_bus_owner == 1) {
                         ++perf_stats.icache_wait_cycles;
