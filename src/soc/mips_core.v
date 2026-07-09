@@ -63,6 +63,7 @@ localparam integer ICACHE_TAG_LSB = ICACHE_INDEX_BITS + 2;
 localparam integer DCACHE_INDEX_BITS = 10;
 localparam integer DCACHE_LINES = (1 << DCACHE_INDEX_BITS);
 localparam integer DCACHE_TAG_LSB = DCACHE_INDEX_BITS + 3;
+localparam DCACHE_PREFETCH_ENABLE = 1'b0;
 
 reg [31:0] gpr [0:31];
 
@@ -389,7 +390,7 @@ wire storeq_must_drain =
 wire can_issue_storeq = bus_free_after_ready && storeq_valid0 && !storeq_active &&
                         (storeq_must_drain ||
                          (!fetch_issue_wants && !redirect_fetch_after_delay));
-wire can_issue_dcache_prefetch = bus_free_after_ready && !fetch_response_now &&
+wire can_issue_dcache_prefetch = DCACHE_PREFETCH_ENABLE && bus_free_after_ready && !fetch_response_now &&
                                  !mem_blocks_fetch && !storeq_valid0 && dcache_prefetch_valid;
 
 assign debug_pc = fetch_pc;
