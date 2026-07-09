@@ -134,14 +134,28 @@ reg [31:0] id_rt_value;
 
 wire [31:0] ex_imm_sext = {{16{id_ex_imm[15]}}, id_ex_imm};
 wire [31:0] ex_imm_zext = {16'b0, id_ex_imm};
-wire signed [31:0] ex_rs_signed_base = ex_rs_value;
-wire signed [31:0] ex_rt_signed_base = ex_rt_value;
 
 reg [31:0] ex_rs_value;
 reg [31:0] ex_rt_value;
 reg [31:0] ex_alu_result;
 reg [31:0] ex_store_data;
 reg [31:0] mem_store_data;
+
+wire signed [31:0] ex_rs_signed_base = ex_rs_value;
+wire signed [31:0] ex_rt_signed_base = ex_rt_value;
+
+wire id_ex_is_mul = id_ex_valid && ex_op == 6'b011100;
+
+reg        mul_stage_valid;
+reg [31:0] mul_stage_pc;
+reg [4:0]  mul_stage_wb_addr;
+reg signed [31:0] mul_stage_a;
+reg signed [31:0] mul_stage_b;
+reg        mul_wb_valid;
+reg [31:0] mul_wb_pc;
+reg [4:0]  mul_wb_addr;
+reg [31:0] mul_wb_data;
+wire [31:0] mul_stage_product = mul_stage_a * mul_stage_b;
 
 wire [DCACHE_INDEX_BITS-1:0] dcache_mem_index = ex_mem_mem_addr[DCACHE_TAG_LSB-1:2];
 wire [31:DCACHE_TAG_LSB] dcache_mem_tag = ex_mem_mem_addr[31:DCACHE_TAG_LSB];
@@ -174,11 +188,28 @@ wire load_use_hazard =
     if_id_valid && id_ex_valid && id_ex_mem_read && id_ex_wb_addr != 5'b0 &&
     ((id_uses_rs && id_rs == id_ex_wb_addr) || (id_uses_rt && id_rt == id_ex_wb_addr));
 
+wire mem_wb_writes_now = mem_wb_valid && mem_wb_wb_en && mem_wb_wb_addr != 5'b0;
+wire mul_wb_writes_now = mul_wb_valid && mul_wb_addr != 5'b0 && !mem_wb_writes_now;
+wire mul_pipe_can_advance = !mul_wb_valid || mul_wb_writes_now;
+wire mul_pipe_block = (mul_stage_valid || id_ex_is_mul) && !mul_pipe_can_advance;
+wire mul_ex_hazard =
+    if_id_valid && id_ex_is_mul && id_ex_wb_addr != 5'b0 &&
+    ((id_uses_rs && id_rs == id_ex_wb_addr) || (id_uses_rt && id_rt == id_ex_wb_addr) ||
+     (id_wb_en && id_wb_addr == id_ex_wb_addr));
+wire mul_stage_hazard =
+    if_id_valid && mul_stage_valid && mul_stage_wb_addr != 5'b0 &&
+    ((id_uses_rs && id_rs == mul_stage_wb_addr) || (id_uses_rt && id_rt == mul_stage_wb_addr) ||
+     (id_wb_en && id_wb_addr == mul_stage_wb_addr));
+wire mul_wb_waw_hazard =
+    if_id_valid && mul_wb_valid && !mul_wb_writes_now && id_wb_en &&
+    id_wb_addr != 5'b0 && id_wb_addr == mul_wb_addr;
+wire mul_hazard = mul_ex_hazard || mul_stage_hazard || mul_wb_waw_hazard || mul_pipe_block;
+
 wire bus_fetch_response_now = bus_valid && bus_ready && bus_owner == BUS_IF;
 wire fetch_response_now = bus_fetch_response_now || icache_resp_valid;
 wire [31:0] fetch_response_pc = icache_resp_valid ? icache_resp_pc : if_req_pc;
 wire [31:0] fetch_response_inst = icache_resp_valid ? icache_resp_inst : bus_rdata;
-wire front_stall = mem_stall || load_use_hazard;
+wire front_stall = mem_stall || load_use_hazard || mul_hazard;
 wire id_advance = if_id_valid && !front_stall;
 wire if_id_can_accept = !front_stall && (!if_id_valid || id_advance);
 wire control_taken_now = if_id_valid && !front_stall && id_is_control && id_branch_taken;
@@ -218,7 +249,7 @@ wire stream_fetch_after_take = fetch_buf_take && !redirect_pending &&
                                (!fetch_buf_is_control || fetch_buf_predict_taken);
 wire bus_free_after_ready = !bus_valid || bus_ready;
 wire can_issue_ex_mem = bus_free_after_ready && (!mem_stage_needs_bus || mem_completes) &&
-                        id_ex_needs_bus && !mem_stall;
+                        id_ex_needs_bus && !mem_stall && !mul_pipe_block;
 wire can_issue_redirect_fetch = bus_free_after_ready && !fetch_response_now &&
                                 !mem_blocks_fetch && redirect_fetch_after_delay;
 wire can_issue_stream_fetch = bus_free_after_ready && !fetch_response_now &&
@@ -252,18 +283,24 @@ always @(*) begin
     id_rs_value = id_rs_gpr;
     id_rt_value = id_rt_gpr;
 
-    if (id_ex_valid && id_ex_wb_en && !id_ex_mem_read && id_ex_wb_addr != 5'b0 && id_ex_wb_addr == id_rs) begin
+    if (id_ex_valid && id_ex_wb_en && !id_ex_mem_read && !id_ex_is_mul &&
+        id_ex_wb_addr != 5'b0 && id_ex_wb_addr == id_rs) begin
         id_rs_value = ex_alu_result;
     end else if (ex_mem_valid && ex_mem_wb_en && !ex_mem_mem_read && ex_mem_wb_addr != 5'b0 && ex_mem_wb_addr == id_rs) begin
         id_rs_value = ex_mem_wb_data;
+    end else if (mul_wb_valid && mul_wb_addr != 5'b0 && mul_wb_addr == id_rs) begin
+        id_rs_value = mul_wb_data;
     end else if (mem_wb_valid && mem_wb_wb_en && mem_wb_wb_addr != 5'b0 && mem_wb_wb_addr == id_rs) begin
         id_rs_value = mem_wb_wb_data;
     end
 
-    if (id_ex_valid && id_ex_wb_en && !id_ex_mem_read && id_ex_wb_addr != 5'b0 && id_ex_wb_addr == id_rt) begin
+    if (id_ex_valid && id_ex_wb_en && !id_ex_mem_read && !id_ex_is_mul &&
+        id_ex_wb_addr != 5'b0 && id_ex_wb_addr == id_rt) begin
         id_rt_value = ex_alu_result;
     end else if (ex_mem_valid && ex_mem_wb_en && !ex_mem_mem_read && ex_mem_wb_addr != 5'b0 && ex_mem_wb_addr == id_rt) begin
         id_rt_value = ex_mem_wb_data;
+    end else if (mul_wb_valid && mul_wb_addr != 5'b0 && mul_wb_addr == id_rt) begin
+        id_rt_value = mul_wb_data;
     end else if (mem_wb_valid && mem_wb_wb_en && mem_wb_wb_addr != 5'b0 && mem_wb_wb_addr == id_rt) begin
         id_rt_value = mem_wb_wb_data;
     end
@@ -321,12 +358,16 @@ always @(*) begin
 
     if (ex_mem_valid && ex_mem_wb_en && !ex_mem_mem_read && ex_mem_wb_addr != 5'b0 && ex_mem_wb_addr == id_ex_rs) begin
         ex_rs_value = ex_mem_wb_data;
+    end else if (mul_wb_valid && mul_wb_addr != 5'b0 && mul_wb_addr == id_ex_rs) begin
+        ex_rs_value = mul_wb_data;
     end else if (mem_wb_valid && mem_wb_wb_en && mem_wb_wb_addr != 5'b0 && mem_wb_wb_addr == id_ex_rs) begin
         ex_rs_value = mem_wb_wb_data;
     end
 
     if (ex_mem_valid && ex_mem_wb_en && !ex_mem_mem_read && ex_mem_wb_addr != 5'b0 && ex_mem_wb_addr == id_ex_rt) begin
         ex_rt_value = ex_mem_wb_data;
+    end else if (mul_wb_valid && mul_wb_addr != 5'b0 && mul_wb_addr == id_ex_rt) begin
+        ex_rt_value = mul_wb_data;
     end else if (mem_wb_valid && mem_wb_wb_en && mem_wb_wb_addr != 5'b0 && mem_wb_wb_addr == id_ex_rt) begin
         ex_rt_value = mem_wb_wb_data;
     end
@@ -336,7 +377,9 @@ always @(*) begin
     mem_store_data = ex_mem_store_data;
     if (ex_mem_mem_write && ex_mem_store_rt != 5'b0) begin
         mem_store_data = gpr[ex_mem_store_rt];
-        if (mem_wb_valid && mem_wb_wb_en && mem_wb_wb_addr == ex_mem_store_rt) begin
+        if (mul_wb_valid && mul_wb_addr == ex_mem_store_rt) begin
+            mem_store_data = mul_wb_data;
+        end else if (mem_wb_valid && mem_wb_wb_en && mem_wb_wb_addr == ex_mem_store_rt) begin
             mem_store_data = mem_wb_wb_data;
         end
     end
@@ -366,7 +409,7 @@ always @(*) begin
                 default: ex_alu_result = 32'b0;
             endcase
         end
-        6'b011100: ex_alu_result = ex_rs_signed_base * ex_rt_signed_base;
+        6'b011100: ex_alu_result = 32'b0;
         6'b001000,
         6'b001001: ex_alu_result = ex_rs_value + ex_imm_sext;
         6'b001100: ex_alu_result = ex_rs_value & ex_imm_zext;
@@ -451,6 +494,15 @@ always @(posedge clk) begin
         ex_mem_mem_addr <= 32'b0;
         ex_mem_store_data <= 32'b0;
         ex_mem_store_rt <= 5'b0;
+        mul_stage_valid <= 1'b0;
+        mul_stage_pc <= 32'b0;
+        mul_stage_wb_addr <= 5'b0;
+        mul_stage_a <= 32'b0;
+        mul_stage_b <= 32'b0;
+        mul_wb_valid <= 1'b0;
+        mul_wb_pc <= 32'b0;
+        mul_wb_addr <= 5'b0;
+        mul_wb_data <= 32'b0;
         mem_active <= 1'b0;
         mem_wb_valid <= 1'b0;
         mem_wb_pc <= 32'b0;
@@ -467,14 +519,24 @@ always @(posedge clk) begin
     end else begin
         debug_wb_rf_wen <= 4'b0;
 
-        if (mem_wb_valid && mem_wb_wb_en && mem_wb_wb_addr != 5'b0) begin
+        if (mem_wb_writes_now) begin
             gpr[mem_wb_wb_addr] <= mem_wb_wb_data;
             debug_wb_pc <= mem_wb_pc;
             debug_wb_rf_wen <= 4'hf;
             debug_wb_rf_wnum <= mem_wb_wb_addr;
             debug_wb_rf_wdata <= mem_wb_wb_data;
+        end else if (mul_wb_writes_now) begin
+            gpr[mul_wb_addr] <= mul_wb_data;
+            debug_wb_pc <= mul_wb_pc;
+            debug_wb_rf_wen <= 4'hf;
+            debug_wb_rf_wnum <= mul_wb_addr;
+            debug_wb_rf_wdata <= mul_wb_data;
         end
         gpr[0] <= 32'b0;
+
+        if (mul_wb_writes_now) begin
+            mul_wb_valid <= 1'b0;
+        end
 
         if (fetch_response_now) begin
             if (fetch_response_can_enqueue && !fetch_buf_take) begin
@@ -522,10 +584,22 @@ always @(posedge clk) begin
             mem_wb_valid <= 1'b0;
         end
 
-        if (!mem_stall) begin
-            ex_mem_valid <= id_ex_valid;
+        if (!mem_stall && !mul_pipe_block) begin
+            if (mul_pipe_can_advance) begin
+                mul_wb_valid <= mul_stage_valid;
+                mul_wb_pc <= mul_stage_pc;
+                mul_wb_addr <= mul_stage_wb_addr;
+                mul_wb_data <= mul_stage_product;
+                mul_stage_valid <= id_ex_is_mul;
+                mul_stage_pc <= id_ex_pc;
+                mul_stage_wb_addr <= id_ex_wb_addr;
+                mul_stage_a <= ex_rs_signed_base;
+                mul_stage_b <= ex_rt_signed_base;
+            end
+
+            ex_mem_valid <= id_ex_valid && !id_ex_is_mul;
             ex_mem_pc <= id_ex_pc;
-            ex_mem_wb_en <= id_ex_wb_en;
+            ex_mem_wb_en <= id_ex_wb_en && !id_ex_is_mul;
             ex_mem_wb_addr <= id_ex_wb_addr;
             ex_mem_wb_data <= ex_alu_result;
             ex_mem_mem_read <= id_ex_mem_read;
@@ -536,7 +610,7 @@ always @(posedge clk) begin
             ex_mem_store_data <= ex_store_data;
             ex_mem_store_rt <= id_ex_rt;
 
-            if (load_use_hazard) begin
+            if (load_use_hazard || mul_ex_hazard || mul_stage_hazard || mul_wb_waw_hazard) begin
                 id_ex_valid <= 1'b0;
                 id_ex_wb_en <= 1'b0;
                 id_ex_mem_read <= 1'b0;
