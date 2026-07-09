@@ -15,7 +15,7 @@ SYSTEM_REAL_UART_EXE = obj_dir/V$(SYSTEM_TOP)_real_uart
 all: core-sample isa-directed lab1 soc-bus
 
 $(CORE_EXE): mips_core_sim.cpp ../src/soc/mips_core.v
-	$(VERILATOR) --cc --exe -Wall -Wno-fatal --top-module $(CORE_TOP) \
+	$(VERILATOR) --cc --exe -Wall -Wno-fatal -DSIMULATION --top-module $(CORE_TOP) \
 		-CFLAGS "$(CXXFLAGS)" ../src/soc/mips_core.v mips_core_sim.cpp
 	$(MAKE) -C obj_dir -f V$(CORE_TOP).mk
 

@@ -126,6 +126,57 @@ struct PendingBus {
     uint32_t wdata = 0;
 };
 
+struct PerfStats {
+    uint64_t cycles = 0;
+    uint64_t wb_writes = 0;
+    uint64_t icache_hits = 0;
+    uint64_t icache_misses = 0;
+    uint64_t icache_wait_cycles = 0;
+    uint64_t dcache_load_hits = 0;
+    uint64_t dcache_load_misses = 0;
+    uint64_t dcache_prefetches = 0;
+    uint64_t dcache_prefetch_wait_cycles = 0;
+    uint64_t stores = 0;
+    uint64_t mem_wait_cycles = 0;
+    uint64_t mmio_or_base_loads = 0;
+    uint64_t mem_stall_cycles = 0;
+    uint64_t load_use_stall_cycles = 0;
+    uint64_t mul_issues = 0;
+    uint64_t mul_stall_cycles = 0;
+    uint64_t branch_taken = 0;
+    uint64_t branch_pred_miss = 0;
+};
+
+bool is_ext_ram(uint32_t addr) {
+    return addr >= 0x80400000u && addr < 0x80800000u;
+}
+
+void print_perf_stats(const PerfStats& stats) {
+    std::printf("perf-stats cycles=%llu wb_writes=%llu\n",
+                static_cast<unsigned long long>(stats.cycles),
+                static_cast<unsigned long long>(stats.wb_writes));
+    std::printf("perf-stats icache hit=%llu miss=%llu wait=%llu\n",
+                static_cast<unsigned long long>(stats.icache_hits),
+                static_cast<unsigned long long>(stats.icache_misses),
+                static_cast<unsigned long long>(stats.icache_wait_cycles));
+    std::printf("perf-stats dcache load_hit=%llu load_miss=%llu prefetch=%llu prefetch_wait=%llu\n",
+                static_cast<unsigned long long>(stats.dcache_load_hits),
+                static_cast<unsigned long long>(stats.dcache_load_misses),
+                static_cast<unsigned long long>(stats.dcache_prefetches),
+                static_cast<unsigned long long>(stats.dcache_prefetch_wait_cycles));
+    std::printf("perf-stats memory stores=%llu mem_wait=%llu mmio_or_base_loads=%llu\n",
+                static_cast<unsigned long long>(stats.stores),
+                static_cast<unsigned long long>(stats.mem_wait_cycles),
+                static_cast<unsigned long long>(stats.mmio_or_base_loads));
+    std::printf("perf-stats stalls mem=%llu load_use=%llu mul_issue=%llu mul=%llu branch_taken=%llu branch_pred_miss=%llu\n",
+                static_cast<unsigned long long>(stats.mem_stall_cycles),
+                static_cast<unsigned long long>(stats.load_use_stall_cycles),
+                static_cast<unsigned long long>(stats.mul_issues),
+                static_cast<unsigned long long>(stats.mul_stall_cycles),
+                static_cast<unsigned long long>(stats.branch_taken),
+                static_cast<unsigned long long>(stats.branch_pred_miss));
+}
+
 void tick(Vmips_core& dut) {
     dut.clk = 0;
     dut.eval();
@@ -195,6 +246,10 @@ int main(int argc, char** argv) {
     bool trace_matrix = trace_matrix_env != nullptr && trace_matrix_env[0] != '\0' &&
                         std::string(trace_matrix_env) != "0";
     unsigned traced_matrix_writes = 0;
+    const char* perf_stats_env = std::getenv("PERF_STATS");
+    bool collect_perf_stats = perf_stats_env != nullptr && perf_stats_env[0] != '\0' &&
+                              std::string(perf_stats_env) != "0";
+    PerfStats perf_stats;
 
     for (int i = 0; i < 5; ++i) {
         tick(dut);
@@ -215,6 +270,65 @@ int main(int argc, char** argv) {
         ready_next = false;
 
         tick(dut);
+
+        if (collect_perf_stats) {
+            perf_stats.cycles = cycle + 1u;
+            if (dut.debug_wb_rf_wen == 0xf) {
+                ++perf_stats.wb_writes;
+            }
+            if (dut.debug_fetch_issue_wants) {
+                if (dut.debug_fetch_issue_hit) {
+                    ++perf_stats.icache_hits;
+                }
+            }
+            if (dut.debug_dcache_mem_hit) {
+                ++perf_stats.dcache_load_hits;
+            }
+            if (dut.debug_mem_stall) {
+                ++perf_stats.mem_stall_cycles;
+            }
+            if (dut.debug_load_use_hazard) {
+                ++perf_stats.load_use_stall_cycles;
+            }
+            if (dut.debug_mul_hazard) {
+                ++perf_stats.mul_stall_cycles;
+            }
+            if (dut.debug_mul_issue) {
+                ++perf_stats.mul_issues;
+            }
+            if (dut.debug_control_taken_now) {
+                ++perf_stats.branch_taken;
+            }
+            if (dut.debug_control_pred_miss_now) {
+                ++perf_stats.branch_pred_miss;
+            }
+            if (dut.debug_icache_miss_complete) {
+                ++perf_stats.icache_misses;
+            }
+            if (dut.debug_dcache_load_miss_complete) {
+                ++perf_stats.dcache_load_misses;
+            }
+            if (dut.debug_dcache_prefetch_complete) {
+                ++perf_stats.dcache_prefetches;
+            }
+            if (dut.debug_mem_store_complete) {
+                ++perf_stats.stores;
+            }
+            if (dut.debug_mmio_or_base_load_complete) {
+                ++perf_stats.mmio_or_base_loads;
+            }
+            if (dut.bus_valid) {
+                if (!dut.bus_ready) {
+                    if (dut.debug_bus_owner == 1) {
+                        ++perf_stats.icache_wait_cycles;
+                    } else if (dut.debug_bus_owner == 2) {
+                        ++perf_stats.mem_wait_cycles;
+                    } else if (dut.debug_bus_owner == 3) {
+                        ++perf_stats.dcache_prefetch_wait_cycles;
+                    }
+                }
+            }
+        }
 
         if (trace && cycle < 90) {
             std::printf("cycle=%llu pcnext=%08x bus_v=%u bus_w=%u bus_a=%08x ready=%u\n",
@@ -421,6 +535,10 @@ int main(int argc, char** argv) {
         if (cryptonight_mode && !kernel_c3_mode && dut.debug_pc < kResetPc) {
             break;
         }
+    }
+
+    if (collect_perf_stats) {
+        print_perf_stats(perf_stats);
     }
 
     if (kernel_c3_mode) {

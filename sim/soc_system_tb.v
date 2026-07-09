@@ -34,6 +34,24 @@ wire [31:0] unused_wb_pc;
 wire [3:0]  unused_wb_rf_wen;
 wire [4:0]  unused_wb_rf_wnum;
 wire [31:0] unused_wb_rf_wdata;
+`ifdef SIMULATION
+wire [1:0]  unused_debug_bus_owner;
+wire        unused_debug_fetch_issue_wants;
+wire        unused_debug_fetch_issue_hit;
+wire        unused_debug_dcache_mem_hit;
+wire        unused_debug_mem_stage_needs_bus;
+wire        unused_debug_mem_stall;
+wire        unused_debug_load_use_hazard;
+wire        unused_debug_mul_hazard;
+wire        unused_debug_control_taken_now;
+wire        unused_debug_control_pred_miss_now;
+wire        unused_debug_icache_miss_complete;
+wire        unused_debug_dcache_load_miss_complete;
+wire        unused_debug_dcache_prefetch_complete;
+wire        unused_debug_mem_store_complete;
+wire        unused_debug_mmio_or_base_load_complete;
+wire        unused_debug_mul_issue;
+`endif
 
 mips_core #(
     .RESET_PC(32'h8000_0000)
@@ -52,6 +70,25 @@ mips_core #(
     .debug_wb_rf_wnum(unused_wb_rf_wnum),
     .debug_wb_rf_wdata(unused_wb_rf_wdata),
     .debug_pc(debug_pc)
+`ifdef SIMULATION
+    ,
+    .debug_bus_owner(unused_debug_bus_owner),
+    .debug_fetch_issue_wants(unused_debug_fetch_issue_wants),
+    .debug_fetch_issue_hit(unused_debug_fetch_issue_hit),
+    .debug_dcache_mem_hit(unused_debug_dcache_mem_hit),
+    .debug_mem_stage_needs_bus(unused_debug_mem_stage_needs_bus),
+    .debug_mem_stall(unused_debug_mem_stall),
+    .debug_load_use_hazard(unused_debug_load_use_hazard),
+    .debug_mul_hazard(unused_debug_mul_hazard),
+    .debug_control_taken_now(unused_debug_control_taken_now),
+    .debug_control_pred_miss_now(unused_debug_control_pred_miss_now),
+    .debug_icache_miss_complete(unused_debug_icache_miss_complete),
+    .debug_dcache_load_miss_complete(unused_debug_dcache_load_miss_complete),
+    .debug_dcache_prefetch_complete(unused_debug_dcache_prefetch_complete),
+    .debug_mem_store_complete(unused_debug_mem_store_complete),
+    .debug_mmio_or_base_load_complete(unused_debug_mmio_or_base_load_complete),
+    .debug_mul_issue(unused_debug_mul_issue)
+`endif
 );
 
 soc_bus #(

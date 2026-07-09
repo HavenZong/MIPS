@@ -19,6 +19,25 @@ module mips_core #(
     output reg  [4:0]  debug_wb_rf_wnum = 5'b0,
     output reg  [31:0] debug_wb_rf_wdata = 32'b0,
     output wire [31:0] debug_pc
+`ifdef SIMULATION
+    ,
+    output wire [1:0]  debug_bus_owner,
+    output wire        debug_fetch_issue_wants,
+    output wire        debug_fetch_issue_hit,
+    output wire        debug_dcache_mem_hit,
+    output wire        debug_mem_stage_needs_bus,
+    output wire        debug_mem_stall,
+    output wire        debug_load_use_hazard,
+    output wire        debug_mul_hazard,
+    output wire        debug_control_taken_now,
+    output wire        debug_control_pred_miss_now,
+    output wire        debug_icache_miss_complete,
+    output wire        debug_dcache_load_miss_complete,
+    output wire        debug_dcache_prefetch_complete,
+    output wire        debug_mem_store_complete,
+    output wire        debug_mmio_or_base_load_complete,
+    output wire        debug_mul_issue
+`endif
 );
 
 localparam SIZE_BYTE = 2'b00;
@@ -294,6 +313,27 @@ wire can_issue_dcache_prefetch = bus_free_after_ready && !fetch_response_now &&
                                  !mem_blocks_fetch && dcache_prefetch_valid;
 
 assign debug_pc = fetch_pc;
+`ifdef SIMULATION
+assign debug_bus_owner = bus_owner;
+assign debug_fetch_issue_wants = fetch_issue_wants;
+assign debug_fetch_issue_hit = fetch_issue_hit;
+assign debug_dcache_mem_hit = dcache_mem_hit;
+assign debug_mem_stage_needs_bus = mem_stage_needs_bus;
+assign debug_mem_stall = mem_stall;
+assign debug_load_use_hazard = load_use_hazard;
+assign debug_mul_hazard = mul_hazard;
+assign debug_control_taken_now = control_taken_now;
+assign debug_control_pred_miss_now = control_pred_miss_now;
+assign debug_icache_miss_complete = bus_valid && bus_ready && bus_owner == BUS_IF;
+assign debug_dcache_load_miss_complete =
+    mem_bus_completes && ex_mem_mem_read && dcache_mem_cacheable;
+assign debug_dcache_prefetch_complete =
+    bus_valid && bus_ready && bus_owner == BUS_DCPF;
+assign debug_mem_store_complete = mem_bus_completes && ex_mem_mem_write;
+assign debug_mmio_or_base_load_complete =
+    mem_bus_completes && ex_mem_mem_read && !dcache_mem_cacheable;
+assign debug_mul_issue = !mem_stall && !mul_pipe_block && id_ex_is_mul;
+`endif
 
 always @(*) begin
     id_rs_value = id_rs_gpr;
