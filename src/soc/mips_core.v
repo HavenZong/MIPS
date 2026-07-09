@@ -119,6 +119,11 @@ reg [31:0] ex_mem_store_data;
 reg [4:0]  ex_mem_store_rt;
 
 reg        mem_active;
+reg        storeq_valid;
+reg        storeq_active;
+reg [31:0] storeq_addr;
+reg [31:0] storeq_data;
+reg [1:0]  storeq_size;
 
 reg        mem_wb_valid;
 reg [31:0] mem_wb_pc;
@@ -189,8 +194,28 @@ wire dcache_mem_hit = ex_mem_valid && ex_mem_mem_read && dcache_mem_cacheable &&
                       dcache_mem_valid_bits[dcache_mem_word] &&
                       dcache_read_tag == dcache_mem_tag;
 wire [31:0] dcache_mem_word_data = dcache_mem_word ? dcache_read_data[63:32] : dcache_read_data[31:0];
-wire [31:0] mem_load_word = dcache_mem_hit ? dcache_mem_word_data : bus_rdata;
+wire storeq_same_word = storeq_valid && storeq_addr[31:2] == ex_mem_mem_addr[31:2];
+wire storeq_same_byte = storeq_same_word && storeq_addr[1:0] == ex_mem_mem_addr[1:0];
+wire storeq_load_word_forward =
+    ex_mem_valid && ex_mem_mem_read && ex_mem_mem_size == SIZE_WORD &&
+    storeq_same_word && storeq_size == SIZE_WORD;
+wire storeq_load_byte_forward =
+    ex_mem_valid && ex_mem_mem_read && ex_mem_mem_size == SIZE_BYTE &&
+    ((storeq_size == SIZE_WORD && storeq_same_word) ||
+     (storeq_size == SIZE_BYTE && storeq_same_byte));
+wire storeq_load_block =
+    ex_mem_valid && ex_mem_mem_read && storeq_same_word &&
+    ex_mem_mem_size == SIZE_WORD && storeq_size == SIZE_BYTE;
+wire [7:0] storeq_load_byte =
+    (storeq_size == SIZE_BYTE) ? storeq_data[7:0] :
+    (ex_mem_mem_addr[1:0] == 2'b00) ? storeq_data[7:0] :
+    (ex_mem_mem_addr[1:0] == 2'b01) ? storeq_data[15:8] :
+    (ex_mem_mem_addr[1:0] == 2'b10) ? storeq_data[23:16] :
+                                      storeq_data[31:24];
+wire [31:0] mem_load_word = storeq_load_word_forward ? storeq_data :
+                             (dcache_mem_hit ? dcache_mem_word_data : bus_rdata);
 wire [7:0] mem_load_byte =
+    storeq_load_byte_forward ? storeq_load_byte :
     (ex_mem_mem_addr[1:0] == 2'b00) ? mem_load_word[7:0] :
     (ex_mem_mem_addr[1:0] == 2'b01) ? mem_load_word[15:8] :
     (ex_mem_mem_addr[1:0] == 2'b10) ? mem_load_word[23:16] :
@@ -198,17 +223,28 @@ wire [7:0] mem_load_byte =
 wire [31:0] mem_load_value =
     (ex_mem_mem_size == SIZE_BYTE) ? {{24{ex_mem_mem_signed && mem_load_byte[7]}}, mem_load_byte} : mem_load_word;
 
+wire mem_store_queueable = ex_mem_valid && ex_mem_mem_write && dcache_mem_cacheable;
+wire mem_store_enqueue_complete = mem_store_queueable && !storeq_valid;
+wire mem_load_forward_complete = storeq_load_word_forward || storeq_load_byte_forward;
+wire mem_direct_needs_bus =
+    ex_mem_valid &&
+    ((ex_mem_mem_write && !dcache_mem_cacheable) ||
+     (ex_mem_mem_read && !dcache_mem_hit && !mem_load_forward_complete));
 wire mem_stage_needs_bus =
-    ex_mem_valid && (ex_mem_mem_write || (ex_mem_mem_read && !dcache_mem_hit));
-wire mem_bus_completes = mem_stage_needs_bus && mem_active && bus_owner == BUS_MEM && bus_ready;
-wire mem_completes = dcache_mem_hit || mem_bus_completes;
-wire mem_stall = mem_stage_needs_bus && !mem_completes;
-wire mem_blocks_fetch = mem_stage_needs_bus && !mem_completes;
+    mem_direct_needs_bus;
+wire mem_bus_completes = mem_direct_needs_bus && mem_active && bus_owner == BUS_MEM && bus_ready;
+wire mem_completes =
+    mem_store_enqueue_complete || mem_load_forward_complete || dcache_mem_hit || mem_bus_completes;
+wire mem_stall =
+    (mem_store_queueable && storeq_valid) || storeq_load_block ||
+    (mem_direct_needs_bus && !mem_bus_completes);
+wire mem_blocks_fetch = mem_stall;
 
 wire [DCACHE_INDEX_BITS-1:0] dcache_ex_index = ex_alu_result[DCACHE_TAG_LSB-1:3];
 wire dcache_ex_cacheable = ex_alu_result >= 32'h8040_0000 && ex_alu_result < 32'h8080_0000;
 wire id_ex_needs_bus =
-    id_ex_valid && (id_ex_mem_write || (id_ex_mem_read && !dcache_ex_cacheable));
+    id_ex_valid && ((id_ex_mem_write && !dcache_ex_cacheable) ||
+                    (id_ex_mem_read && !dcache_ex_cacheable));
 
 wire load_use_hazard =
     if_id_valid && id_ex_valid && id_ex_mem_read && id_ex_wb_addr != 5'b0 &&
@@ -235,7 +271,10 @@ wire bus_fetch_response_now = bus_valid && bus_ready && bus_owner == BUS_IF;
 wire fetch_response_now = bus_fetch_response_now || icache_resp_valid;
 wire [31:0] fetch_response_pc = icache_resp_valid ? icache_resp_pc : if_req_pc;
 wire [31:0] fetch_response_inst = icache_resp_valid ? icache_resp_inst : bus_rdata;
-wire front_stall = mem_stall || load_use_hazard || mul_hazard;
+wire id_is_register_jump =
+    id_op == 6'b000000 && (id_func == 6'b001000 || id_func == 6'b001001);
+wire control_storeq_drain_hazard = if_id_valid && id_is_register_jump && storeq_valid;
+wire front_stall = mem_stall || load_use_hazard || mul_hazard || control_storeq_drain_hazard;
 wire id_advance = if_id_valid && !front_stall;
 wire if_id_can_accept = !front_stall && (!if_id_valid || id_advance);
 wire control_taken_now = if_id_valid && !front_stall && id_is_control && id_branch_taken;
@@ -299,6 +338,7 @@ wire [31:0] fetch_issue_inst = icache_data[fetch_issue_index];
 wire [ICACHE_INDEX_BITS-1:0] if_req_index = if_req_pc[ICACHE_TAG_LSB-1:2];
 wire if_req_cacheable = if_req_pc >= 32'h8010_0000 && if_req_pc < 32'h8080_0000;
 wire [ICACHE_INDEX_BITS-1:0] ex_mem_addr_index = ex_mem_mem_addr[ICACHE_TAG_LSB-1:2];
+wire [ICACHE_INDEX_BITS-1:0] storeq_addr_icache_index = storeq_addr[ICACHE_TAG_LSB-1:2];
 wire [DCACHE_INDEX_BITS-1:0] bus_dcache_index = bus_addr[DCACHE_TAG_LSB-1:3];
 wire bus_dcache_word = bus_addr[2];
 wire [1:0] bus_dcache_valid_bits = dcache_valid[{bus_dcache_index, 1'b0} +: 2];
@@ -309,8 +349,15 @@ wire [1:0] bus_dcache_fill_bits =
     (dcache_read_tag == bus_addr[31:DCACHE_TAG_LSB]) ?
     (bus_dcache_valid_bits | bus_dcache_word_valid) :
     bus_dcache_word_valid;
+wire storeq_must_drain =
+    storeq_valid &&
+    (control_storeq_drain_hazard || mem_direct_needs_bus ||
+     (mem_store_queueable && storeq_valid) || storeq_load_block);
+wire can_issue_storeq = bus_free_after_ready && storeq_valid && !storeq_active &&
+                        (storeq_must_drain ||
+                         (!fetch_issue_wants && !redirect_fetch_after_delay));
 wire can_issue_dcache_prefetch = bus_free_after_ready && !fetch_response_now &&
-                                 !mem_blocks_fetch && dcache_prefetch_valid;
+                                 !mem_blocks_fetch && !storeq_valid && dcache_prefetch_valid;
 
 assign debug_pc = fetch_pc;
 `ifdef SIMULATION
@@ -329,7 +376,9 @@ assign debug_dcache_load_miss_complete =
     mem_bus_completes && ex_mem_mem_read && dcache_mem_cacheable;
 assign debug_dcache_prefetch_complete =
     bus_valid && bus_ready && bus_owner == BUS_DCPF;
-assign debug_mem_store_complete = mem_bus_completes && ex_mem_mem_write;
+assign debug_mem_store_complete =
+    (mem_bus_completes && ex_mem_mem_write) ||
+    (bus_valid && bus_ready && bus_owner == BUS_MEM && storeq_active);
 assign debug_mmio_or_base_load_complete =
     mem_bus_completes && ex_mem_mem_read && !dcache_mem_cacheable;
 assign debug_mul_issue = !mem_stall && !mul_pipe_block && id_ex_is_mul;
@@ -568,6 +617,11 @@ always @(posedge clk) begin
         mul_wb_addr <= 5'b0;
         mul_wb_data <= 32'b0;
         mem_active <= 1'b0;
+        storeq_valid <= 1'b0;
+        storeq_active <= 1'b0;
+        storeq_addr <= 32'b0;
+        storeq_data <= 32'b0;
+        storeq_size <= SIZE_WORD;
         mem_wb_valid <= 1'b0;
         mem_wb_pc <= 32'b0;
         mem_wb_wb_en <= 1'b0;
@@ -639,6 +693,10 @@ always @(posedge clk) begin
                 dcache_valid[{bus_dcache_index, 1'b0} +: 2] <=
                     dcache_prefetch_bits | bus_dcache_word_valid;
             end
+            if (bus_owner == BUS_MEM && storeq_active) begin
+                storeq_valid <= 1'b0;
+                storeq_active <= 1'b0;
+            end
             bus_valid <= 1'b0;
             bus_owner <= BUS_NONE;
         end
@@ -650,6 +708,15 @@ always @(posedge clk) begin
             mem_wb_wb_addr <= ex_mem_wb_addr;
             mem_wb_wb_data <= mem_load_value;
             mem_active <= 1'b0;
+            if (mem_store_enqueue_complete) begin
+                storeq_valid <= 1'b1;
+                storeq_active <= 1'b0;
+                storeq_addr <= ex_mem_mem_addr;
+                storeq_data <= mem_store_data;
+                storeq_size <= ex_mem_mem_size;
+                icache_valid[ex_mem_addr_index] <= 1'b0;
+                dcache_prefetch_valid <= 1'b0;
+            end
         end else if (!mem_stall) begin
             mem_wb_valid <= ex_mem_valid && !(ex_mem_mem_read || ex_mem_mem_write);
             mem_wb_pc <= ex_mem_pc;
@@ -773,7 +840,16 @@ always @(posedge clk) begin
             end
         end
 
-        if (!bus_valid && mem_stage_needs_bus && !mem_active) begin
+        if (can_issue_storeq) begin
+            bus_valid <= 1'b1;
+            bus_owner <= BUS_MEM;
+            bus_write <= 1'b1;
+            bus_size <= storeq_size;
+            bus_addr <= storeq_addr;
+            bus_wdata <= storeq_data;
+            storeq_active <= 1'b1;
+            icache_valid[storeq_addr_icache_index] <= 1'b0;
+        end else if (!bus_valid && mem_stage_needs_bus && !mem_active) begin
             bus_valid <= 1'b1;
             bus_owner <= BUS_MEM;
             bus_write <= ex_mem_mem_write;
