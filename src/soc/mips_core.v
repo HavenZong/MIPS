@@ -257,6 +257,9 @@ wire dcache_store_cache_complete =
     ex_mem_valid && ex_mem_mem_write && dcache_mem_cacheable &&
     !dcache_mem_dirty_conflict &&
     (dcache_store_hit || ex_mem_mem_size == SIZE_WORD);
+wire dcache_store_conflict_bypass =
+    ex_mem_valid && ex_mem_mem_write && dcache_mem_cacheable &&
+    dcache_mem_dirty_conflict;
 wire storeq_valid0 = storeq_count != 2'd0;
 wire storeq_valid1 = storeq_count == 2'd2;
 wire storeq_full = storeq_count == 2'd2;
@@ -308,7 +311,7 @@ wire [31:0] mem_load_value =
     (ex_mem_mem_size == SIZE_BYTE) ? {{24{ex_mem_mem_signed && mem_load_byte[7]}}, mem_load_byte} : mem_load_word;
 
 wire mem_store_queueable = ex_mem_valid && ex_mem_mem_write && dcache_mem_cacheable &&
-                            !dcache_store_cache_complete && !dcache_mem_dirty_conflict;
+                            !dcache_store_cache_complete;
 wire mem_store_enqueue_complete = mem_store_queueable && (!storeq_full || storeq_drain_complete);
 wire mem_load_forward_complete = storeq_load_word_forward || storeq_load_byte_forward;
 wire mem_direct_needs_bus =
@@ -324,7 +327,8 @@ wire mem_completes =
     mem_load_forward_complete || dcache_mem_hit || mem_bus_completes;
 wire mem_stall =
     (mem_store_queueable && storeq_full) || storeq_load_block ||
-    dcache_mem_dirty_conflict || (mem_direct_needs_bus && !mem_bus_completes);
+    (dcache_mem_dirty_conflict && !dcache_store_conflict_bypass) ||
+    (mem_direct_needs_bus && !mem_bus_completes);
 wire mem_blocks_fetch = mem_stall || dcache_flush_request || dcache_flush_active;
 
 wire [DCACHE_INDEX_BITS-1:0] dcache_ex_index = ex_alu_result[DCACHE_TAG_LSB-1:3];
@@ -501,6 +505,7 @@ wire dcache_evict_issue_high = dcache_evict_active ? dcache_evict_write_high :
 wire [31:0] dcache_evict_addr_base = {dcache_read_tag, dcache_mem_index, 3'b000};
 wire can_issue_dcache_evict =
     !bus_valid && dcache_mem_dirty_conflict &&
+    !dcache_store_conflict_bypass &&
     !storeq_valid0 && !storeq_active && !mem_active &&
     (dcache_evict_active || dcache_mem_valid_bits != 2'b00);
 wire dcache_flush_pipeline_empty =
