@@ -2,11 +2,8 @@ cd [file normalize [file join [file dirname [info script]] ..]]
 
 # Run implementation and emit reports.
 open_project project/thinpad_top.xpr
-set_param general.maxThreads 1
 
 set synth_run [get_runs synth_1]
-set_property INCREMENTAL_CHECKPOINT {} $synth_run
-set_property STEPS.SYNTH_DESIGN.ARGS.DIRECTIVE RuntimeOptimized $synth_run
 reset_run $synth_run
 launch_runs synth_1
 wait_on_run synth_1
@@ -29,11 +26,6 @@ if {[string first "ERROR" $synth_status] >= 0 || [string first "Failed" $synth_s
 }
 
 set impl_run [get_runs impl_1]
-set_property INCREMENTAL_CHECKPOINT {} $impl_run
-set_property STEPS.PLACE_DESIGN.ARGS.DIRECTIVE ExtraTimingOpt $impl_run
-set_property STEPS.PHYS_OPT_DESIGN.IS_ENABLED true $impl_run
-set_property STEPS.PHYS_OPT_DESIGN.ARGS.DIRECTIVE AggressiveExplore $impl_run
-set_property STEPS.ROUTE_DESIGN.ARGS.DIRECTIVE AggressiveExplore $impl_run
 reset_run $impl_run
 
 launch_runs impl_1
