@@ -85,15 +85,18 @@ reg [31:0] fetch_buf_inst;
 reg        fetch_spill_valid;
 reg [31:0] fetch_spill_pc;
 reg [31:0] fetch_spill_inst;
-reg [31:0] icache_data [0:ICACHE_LINES-1];
-reg [31:ICACHE_TAG_LSB] icache_tag [0:ICACHE_LINES-1];
-reg [ICACHE_LINES-1:0] icache_valid;
+reg        ic_lookup_valid;
+reg [31:0] ic_lookup_pc;
+reg        ic_lookup_cache_ok;
+reg [31:0] ic_lookup_read_pc;
+reg        ic_lookup_read_valid;
+wire [31:ICACHE_TAG_LSB] icache_read_tag;
+wire [1:0] icache_read_epoch;
+wire [31:0] icache_ram_read_data;
+wire [1:0] icache_epoch;
 reg        icache_resp_valid;
 reg [31:0] icache_resp_pc;
 reg [31:0] icache_resp_inst;
-reg        icache_invalidate_valid;
-reg [ICACHE_INDEX_BITS-1:0] icache_invalidate_index;
-reg [31:ICACHE_TAG_LSB] icache_invalidate_tag;
 (* ram_style = "block" *) reg [31:DCACHE_TAG_LSB] dcache_tag [0:DCACHE_LINES-1];
 reg [DCACHE_LINES*2-1:0] dcache_valid;
 reg [DCACHE_LINES-1:0] dcache_dirty;
@@ -333,6 +336,16 @@ wire mem_stall =
     (dcache_mem_dirty_conflict && !dcache_store_conflict_bypass) ||
     (mem_direct_needs_bus && !mem_bus_completes);
 wire mem_blocks_fetch = mem_stall || dcache_flush_request || dcache_flush_active;
+wire ic_lookup_cacheable = ic_lookup_cache_ok &&
+                            ic_lookup_pc >= CACHEABLE_LOW && ic_lookup_pc < CACHEABLE_HIGH;
+wire [31:ICACHE_TAG_LSB] ic_lookup_tag = ic_lookup_pc[31:ICACHE_TAG_LSB];
+wire icache_read_valid = icache_read_epoch == icache_epoch;
+wire ic_lookup_hit = ic_lookup_read_valid && ic_lookup_valid &&
+                     ic_lookup_read_pc == ic_lookup_pc &&
+                     ic_lookup_cacheable && icache_read_valid &&
+                     icache_read_tag == ic_lookup_tag;
+wire ic_lookup_complete = ic_lookup_hit;
+wire ic_lookup_needs_bus = ic_lookup_valid && (!ic_lookup_cacheable || !ic_lookup_hit);
 
 wire [DCACHE_INDEX_BITS-1:0] dcache_ex_index = ex_alu_result[DCACHE_TAG_LSB-1:3];
 wire [DCACHE_INDEX_BITS-1:0] dcache_read_index =
@@ -424,47 +437,34 @@ wire can_issue_redirect_fetch = bus_free_after_ready && !fetch_response_now &&
                                 redirect_fetch_after_delay;
 wire can_issue_stream_fetch = bus_free_after_ready && !fetch_response_now &&
                               !mem_blocks_fetch && !dcache_flush_request_now &&
-                              stream_fetch_after_take;
+                              !ic_lookup_valid && stream_fetch_after_take;
 wire can_issue_fetch = bus_free_after_ready && !fetch_response_now &&
-                       !fetch_buf_valid && !fetch_spill_valid && !mem_blocks_fetch &&
+                       !ic_lookup_valid && !fetch_buf_valid && !fetch_spill_valid && !mem_blocks_fetch &&
                        !dcache_flush_request_now &&
                        if_id_can_accept && (!redirect_pending || fetch_pc == redirect_delay_pc) &&
                        (!control_taken_now || fetch_pc == control_delay_pc_now);
 wire fetch_issue_wants = can_issue_stream_fetch || can_issue_fetch;
 wire [31:0] fetch_issue_pc = fetch_pc;
 wire fetch_issue_cache_ok = !(if_id_valid && id_is_control) && !redirect_pending;
-wire fetch_issue_cacheable = fetch_issue_cache_ok &&
-                             fetch_issue_pc >= CACHEABLE_LOW && fetch_issue_pc < CACHEABLE_HIGH;
-wire [ICACHE_INDEX_BITS-1:0] fetch_issue_index =
-    fetch_issue_cache_ok ? fetch_issue_pc[ICACHE_TAG_LSB-1:2] : {ICACHE_INDEX_BITS{1'b0}};
-wire [31:ICACHE_TAG_LSB] fetch_issue_tag =
-    fetch_issue_cache_ok ? fetch_issue_pc[31:ICACHE_TAG_LSB] : {(32-ICACHE_TAG_LSB){1'b0}};
-wire fetch_issue_hit = fetch_issue_cacheable && icache_valid[fetch_issue_index] &&
-                       icache_tag[fetch_issue_index] == fetch_issue_tag;
-wire [31:0] fetch_issue_inst = icache_data[fetch_issue_index];
+wire [ICACHE_INDEX_BITS-1:0] fetch_issue_index = fetch_issue_pc[ICACHE_TAG_LSB-1:2];
+wire [ICACHE_INDEX_BITS-1:0] redirect_fetch_index = redirect_fetch_pc[ICACHE_TAG_LSB-1:2];
+wire icache_read_en = can_issue_redirect_fetch || fetch_issue_wants;
+wire [ICACHE_INDEX_BITS-1:0] icache_read_addr =
+    can_issue_redirect_fetch ? redirect_fetch_index : fetch_issue_index;
 wire [ICACHE_INDEX_BITS-1:0] if_req_index = if_req_pc[ICACHE_TAG_LSB-1:2];
 wire if_req_cacheable = if_req_pc >= CACHEABLE_LOW && if_req_pc < CACHEABLE_HIGH;
 wire [ICACHE_INDEX_BITS-1:0] ex_mem_addr_index = ex_mem_mem_addr[ICACHE_TAG_LSB-1:2];
-wire [31:ICACHE_TAG_LSB] ex_mem_addr_icache_tag = ex_mem_mem_addr[31:ICACHE_TAG_LSB];
-wire ex_mem_addr_icache_cacheable =
-    ex_mem_mem_addr >= CACHEABLE_LOW && ex_mem_mem_addr < CACHEABLE_HIGH;
-wire ex_mem_addr_icache_hit =
-    ex_mem_addr_icache_cacheable && icache_valid[ex_mem_addr_index] &&
-    icache_tag[ex_mem_addr_index] == ex_mem_addr_icache_tag;
-wire [ICACHE_INDEX_BITS-1:0] ex_alu_addr_icache_index = ex_alu_result[ICACHE_TAG_LSB-1:2];
-wire [31:ICACHE_TAG_LSB] ex_alu_addr_icache_tag = ex_alu_result[31:ICACHE_TAG_LSB];
-wire ex_alu_addr_icache_cacheable =
-    ex_alu_result >= CACHEABLE_LOW && ex_alu_result < CACHEABLE_HIGH;
-wire [ICACHE_INDEX_BITS-1:0] storeq_addr_icache_index = storeq_addr0[ICACHE_TAG_LSB-1:2];
-wire [31:ICACHE_TAG_LSB] storeq_addr_icache_tag = storeq_addr0[31:ICACHE_TAG_LSB];
-wire storeq_addr_icache_cacheable =
-    storeq_addr0 >= CACHEABLE_LOW && storeq_addr0 < CACHEABLE_HIGH;
-wire storeq_addr_icache_hit =
-    storeq_addr_icache_cacheable && icache_valid[storeq_addr_icache_index] &&
-    icache_tag[storeq_addr_icache_index] == storeq_addr_icache_tag;
-wire icache_invalidate_hit =
-    icache_invalidate_valid && icache_valid[icache_invalidate_index] &&
-    icache_tag[icache_invalidate_index] == icache_invalidate_tag;
+wire ex_mem_addr_icache_code =
+    ex_mem_mem_addr >= CACHEABLE_LOW && ex_mem_mem_addr < 32'h8040_0000;
+wire bus_write_icache_code =
+    bus_valid && bus_ready && bus_write &&
+    bus_addr >= CACHEABLE_LOW && bus_addr < 32'h8040_0000;
+wire dcache_store_icache_code =
+    (dcache_store_cache_complete || mem_store_enqueue_complete) &&
+    ex_mem_addr_icache_code;
+wire icache_meta_invalidate_en = bus_write_icache_code || dcache_store_icache_code;
+wire [ICACHE_INDEX_BITS-1:0] icache_meta_invalidate_index =
+    bus_write_icache_code ? bus_addr[ICACHE_TAG_LSB-1:2] : ex_mem_addr_index;
 wire [DCACHE_INDEX_BITS-1:0] bus_dcache_index = bus_addr[DCACHE_TAG_LSB-1:3];
 wire bus_dcache_word = bus_addr[2];
 wire [1:0] bus_dcache_valid_bits = dcache_valid[{bus_dcache_index, 1'b0} +: 2];
@@ -525,13 +525,13 @@ wire can_issue_dcache_flush =
     !bus_valid && dcache_flush_active &&
     dcache_flush_state == FLUSH_WRITE && !storeq_valid0 &&
     !mem_stage_needs_bus && !mem_active;
+wire can_issue_icache_miss =
+    bus_free_after_ready && !fetch_response_now && !ic_lookup_complete && ic_lookup_needs_bus &&
+    !mem_blocks_fetch && !dcache_flush_request_now;
 
 assign debug_pc = fetch_pc;
 
-dcache_data_ram #(
-    .ADDR_WIDTH(DCACHE_INDEX_BITS),
-    .DATA_WIDTH(32)
-) dcache_data_low_ram (
+dcache_data_ram dcache_data_low_ram (
     .clk(clk),
     .read_en(!mem_stall || dcache_flush_active),
     .read_addr(dcache_read_index),
@@ -541,10 +541,7 @@ dcache_data_ram #(
     .write_data(dcache_ram_write_data)
 );
 
-dcache_data_ram #(
-    .ADDR_WIDTH(DCACHE_INDEX_BITS),
-    .DATA_WIDTH(32)
-) dcache_data_high_ram (
+dcache_data_ram dcache_data_high_ram (
     .clk(clk),
     .read_en(!mem_stall || dcache_flush_active),
     .read_addr(dcache_read_index),
@@ -554,10 +551,36 @@ dcache_data_ram #(
     .write_data(dcache_ram_write_data)
 );
 
+icache_data_ram icache_data_ram_inst (
+    .clk(clk),
+    .read_en(icache_read_en),
+    .read_addr(icache_read_addr),
+    .read_data(icache_ram_read_data),
+    .write_en(bus_fetch_response_now && if_req_cacheable),
+    .write_addr(if_req_index),
+    .write_data(bus_rdata)
+);
+
+icache_meta_ram icache_meta_ram_inst (
+    .clk(clk),
+    .reset(reset),
+    .read_en(icache_read_en),
+    .read_addr(icache_read_addr),
+    .read_tag(icache_read_tag),
+    .read_epoch(icache_read_epoch),
+    .epoch(icache_epoch),
+    .fill_en(bus_fetch_response_now && if_req_cacheable),
+    .fill_addr(if_req_index),
+    .fill_tag(if_req_pc[31:ICACHE_TAG_LSB]),
+    .invalidate_en(icache_meta_invalidate_en),
+    .invalidate_addr(icache_meta_invalidate_index)
+);
+
+
 `ifdef SIMULATION
 assign debug_bus_owner = bus_owner;
 assign debug_fetch_issue_wants = fetch_issue_wants;
-assign debug_fetch_issue_hit = fetch_issue_hit;
+assign debug_fetch_issue_hit = ic_lookup_hit;
 assign debug_dcache_mem_hit = dcache_mem_hit;
 assign debug_mem_stage_needs_bus = mem_stage_needs_bus;
 assign debug_mem_stall = mem_stall;
@@ -744,7 +767,14 @@ always @(posedge clk) begin
         dcache_read_forward_valid <= 1'b0;
         dcache_read_forward_data <= 64'b0;
         dcache_read_forward_tag <= {(32-DCACHE_TAG_LSB){1'b0}};
+        ic_lookup_read_pc <= 32'b0;
+        ic_lookup_read_valid <= 1'b0;
     end else begin
+        ic_lookup_read_valid <= icache_read_en;
+        if (icache_read_en) begin
+            ic_lookup_read_pc <= can_issue_redirect_fetch ? redirect_fetch_pc : fetch_issue_pc;
+        end
+
         if (!mem_stall || dcache_flush_active) begin
             dcache_ram_read_tag <= dcache_tag[dcache_read_index];
             dcache_read_forward_valid <= 1'b0;
@@ -792,13 +822,12 @@ always @(posedge clk) begin
         fetch_spill_valid <= 1'b0;
         fetch_spill_pc <= 32'b0;
         fetch_spill_inst <= 32'b0;
-        icache_valid <= {ICACHE_LINES{1'b0}};
+        ic_lookup_valid <= 1'b0;
+        ic_lookup_pc <= 32'b0;
+        ic_lookup_cache_ok <= 1'b0;
         icache_resp_valid <= 1'b0;
         icache_resp_pc <= 32'b0;
         icache_resp_inst <= 32'b0;
-        icache_invalidate_valid <= 1'b0;
-        icache_invalidate_index <= {ICACHE_INDEX_BITS{1'b0}};
-        icache_invalidate_tag <= {(32-ICACHE_TAG_LSB){1'b0}};
         dcache_valid <= {(DCACHE_LINES*2){1'b0}};
         dcache_dirty <= {DCACHE_LINES{1'b0}};
         dcache_dirty_any <= 1'b0;
@@ -879,6 +908,14 @@ always @(posedge clk) begin
     end else begin
         debug_wb_rf_wen <= 4'b0;
 
+        if (ic_lookup_complete) begin
+            icache_resp_valid <= 1'b1;
+            icache_resp_pc <= ic_lookup_pc;
+            icache_resp_inst <= icache_ram_read_data;
+            ic_lookup_valid <= 1'b0;
+            ic_lookup_cache_ok <= 1'b0;
+        end
+
         if (mem_wb_writes_now) begin
             gpr[mem_wb_wb_addr] <= mem_wb_wb_data;
             debug_wb_pc <= mem_wb_pc;
@@ -910,16 +947,15 @@ always @(posedge clk) begin
                     fetch_buf_inst <= fetch_response_inst;
                 end
             end
-            icache_resp_valid <= 1'b0;
+            if (icache_resp_valid && !ic_lookup_complete) begin
+                icache_resp_valid <= 1'b0;
+            end
         end
 
         if (bus_valid && bus_ready) begin
             if (bus_owner == BUS_IF) begin
-                if (if_req_cacheable) begin
-                    icache_data[if_req_index] <= bus_rdata;
-                    icache_tag[if_req_index] <= if_req_pc[31:ICACHE_TAG_LSB];
-                    icache_valid[if_req_index] <= 1'b1;
-                end
+                ic_lookup_valid <= 1'b0;
+                ic_lookup_cache_ok <= 1'b0;
             end else if (bus_owner == BUS_MEM && bus_dcache_cacheable) begin
                 if (bus_write) begin
                     dcache_prefetch_valid <= 1'b0;
@@ -969,13 +1005,6 @@ always @(posedge clk) begin
             bus_owner <= BUS_NONE;
         end
 
-        if (icache_invalidate_valid) begin
-            if (icache_invalidate_hit) begin
-                icache_valid[icache_invalidate_index] <= 1'b0;
-            end
-            icache_invalidate_valid <= 1'b0;
-        end
-
         if (dcache_store_cache_complete) begin
             dcache_valid[{dcache_mem_index, 1'b0} +: 2] <=
                 dcache_mem_tag_match ? (dcache_mem_valid_bits | (dcache_mem_word ? 2'b10 : 2'b01)) :
@@ -983,9 +1012,6 @@ always @(posedge clk) begin
             dcache_dirty[dcache_mem_index] <= 1'b1;
             dcache_dirty_any <= 1'b1;
             dcache_prefetch_valid <= 1'b0;
-            if (ex_mem_addr_icache_hit) begin
-                icache_valid[ex_mem_addr_index] <= 1'b0;
-            end
         end
 
         if (dcache_flush_request_now) begin
@@ -994,6 +1020,8 @@ always @(posedge clk) begin
             fetch_pc <= RESET_PC;
             fetch_buf_valid <= 1'b0;
             fetch_spill_valid <= 1'b0;
+            ic_lookup_valid <= 1'b0;
+            ic_lookup_cache_ok <= 1'b0;
             icache_resp_valid <= 1'b0;
             dcache_prefetch_valid <= 1'b0;
         end
@@ -1030,9 +1058,6 @@ always @(posedge clk) begin
             mem_wb_wb_data <= mem_load_value;
             mem_active <= 1'b0;
             if (dcache_store_cache_complete || mem_store_enqueue_complete) begin
-                if (ex_mem_addr_icache_hit) begin
-                    icache_valid[ex_mem_addr_index] <= 1'b0;
-                end
                 dcache_prefetch_valid <= 1'b0;
             end
         end else if (!mem_stall) begin
@@ -1097,6 +1122,10 @@ always @(posedge clk) begin
                     redirect_target <= id_branch_taken ? id_branch_target : if_id_pc + 32'd8;
                     redirect_delay_pc <= if_id_pc + 32'd4;
                     fetch_pc <= if_id_pc + 32'd4;
+                    if (ic_lookup_valid && ic_lookup_pc != if_id_pc + 32'd4) begin
+                        ic_lookup_valid <= 1'b0;
+                        ic_lookup_cache_ok <= 1'b0;
+                    end
                     if ((fetch_buf_valid && fetch_buf_pc != if_id_pc + 32'd4) ||
                         (fetch_response_now && fetch_response_pc != if_id_pc + 32'd4)) begin
                         if (fetch_spill_valid && fetch_spill_pc == if_id_pc + 32'd4) begin
@@ -1121,6 +1150,9 @@ always @(posedge clk) begin
                     if (redirect_action_now) begin
                         fetch_buf_valid <= 1'b0;
                         fetch_spill_valid <= 1'b0;
+                        ic_lookup_valid <= 1'b0;
+                        ic_lookup_cache_ok <= 1'b0;
+                        icache_resp_valid <= 1'b0;
                         fetch_pc <= dcache_flush_request_now ? RESET_PC : redirect_fetch_pc;
                         redirect_pending <= 1'b0;
                     end else begin
@@ -1129,6 +1161,10 @@ always @(posedge clk) begin
                             redirect_target <= fetch_buf_predict_target;
                             redirect_delay_pc <= fetch_buf_pc + 32'd4;
                             fetch_pc <= fetch_buf_pc + 32'd4;
+                            if (ic_lookup_valid && ic_lookup_pc != fetch_buf_pc + 32'd4) begin
+                                ic_lookup_valid <= 1'b0;
+                                ic_lookup_cache_ok <= 1'b0;
+                            end
                         end
                         if (fetch_spill_valid) begin
                             fetch_buf_valid <= 1'b1;
@@ -1165,9 +1201,6 @@ always @(posedge clk) begin
             bus_size <= storeq_size0;
             bus_addr <= storeq_addr0;
             bus_wdata <= storeq_data0;
-            if (storeq_addr_icache_hit) begin
-                icache_valid[storeq_addr_icache_index] <= 1'b0;
-            end
         end else if (can_issue_dcache_evict) begin
             bus_valid <= 1'b1;
             bus_owner <= BUS_DCEV;
@@ -1185,11 +1218,6 @@ always @(posedge clk) begin
             bus_addr <= ex_mem_mem_addr;
             bus_wdata <= mem_store_data;
             mem_active <= 1'b1;
-            if (ex_mem_mem_write) begin
-                if (ex_mem_addr_icache_hit) begin
-                    icache_valid[ex_mem_addr_index] <= 1'b0;
-                end
-            end
         end else if (can_issue_ex_mem) begin
             bus_valid <= 1'b1;
             bus_owner <= BUS_MEM;
@@ -1198,20 +1226,15 @@ always @(posedge clk) begin
             bus_addr <= ex_alu_result;
             bus_wdata <= ex_store_data;
             mem_active <= 1'b1;
-            if (id_ex_mem_write && ex_alu_addr_icache_cacheable) begin
-                icache_invalidate_valid <= 1'b1;
-                icache_invalidate_index <= ex_alu_addr_icache_index;
-                icache_invalidate_tag <= ex_alu_addr_icache_tag;
-            end
         end else if (can_issue_redirect_fetch) begin
-            bus_valid <= 1'b1;
-            bus_owner <= BUS_IF;
             bus_write <= 1'b0;
             bus_size <= SIZE_WORD;
-            bus_addr <= redirect_fetch_pc;
             bus_wdata <= 32'b0;
             if_req_pc <= redirect_fetch_pc;
             fetch_pc <= redirect_fetch_pc + 32'd4;
+            ic_lookup_valid <= 1'b1;
+            ic_lookup_pc <= redirect_fetch_pc;
+            ic_lookup_cache_ok <= 1'b1;
         end else if (can_issue_dcache_flush) begin
             bus_valid <= 1'b1;
             bus_owner <= BUS_DCFL;
@@ -1225,17 +1248,17 @@ always @(posedge clk) begin
             bus_wdata <= 32'b0;
             if_req_pc <= fetch_issue_pc;
             fetch_pc <= fetch_issue_pc + 32'd4;
-            if (fetch_issue_hit) begin
-                icache_resp_valid <= 1'b1;
-                icache_resp_pc <= fetch_issue_pc;
-                icache_resp_inst <= fetch_issue_inst;
-                bus_owner <= BUS_IF;
-                bus_addr <= fetch_issue_pc;
-            end else begin
-                bus_valid <= 1'b1;
-                bus_owner <= BUS_IF;
-                bus_addr <= fetch_issue_pc;
-            end
+            ic_lookup_valid <= 1'b1;
+            ic_lookup_pc <= fetch_issue_pc;
+            ic_lookup_cache_ok <= fetch_issue_cache_ok;
+        end else if (can_issue_icache_miss) begin
+            bus_valid <= 1'b1;
+            bus_owner <= BUS_IF;
+            bus_write <= 1'b0;
+            bus_size <= SIZE_WORD;
+            bus_addr <= ic_lookup_pc;
+            bus_wdata <= 32'b0;
+            if_req_pc <= ic_lookup_pc;
         end else if (can_issue_dcache_prefetch) begin
             bus_valid <= 1'b1;
             bus_owner <= BUS_DCPF;
@@ -1291,20 +1314,88 @@ end
 
 endmodule
 
-module dcache_data_ram #(
-    parameter integer ADDR_WIDTH = 13,
-    parameter integer DATA_WIDTH = 32
-)(
-    input  wire                  clk,
-    input  wire                  read_en,
-    input  wire [ADDR_WIDTH-1:0] read_addr,
-    output reg  [DATA_WIDTH-1:0] read_data,
-    input  wire                  write_en,
-    input  wire [ADDR_WIDTH-1:0] write_addr,
-    input  wire [DATA_WIDTH-1:0] write_data
+module icache_meta_ram (
+    input  wire        clk,
+    input  wire        reset,
+    input  wire        read_en,
+    input  wire [10:0] read_addr,
+    output reg  [18:0] read_tag,
+    output reg  [1:0]  read_epoch,
+    output wire [1:0]  epoch,
+    input  wire        fill_en,
+    input  wire [10:0] fill_addr,
+    input  wire [18:0] fill_tag,
+    input  wire        invalidate_en,
+    input  wire [10:0] invalidate_addr
 );
 
-(* ram_style = "block" *) reg [DATA_WIDTH-1:0] mem [0:(1 << ADDR_WIDTH)-1];
+(* ram_style = "block" *) reg [20:0] meta_mem [0:2047];
+reg [1:0]  epoch_reg = 2'd1;
+integer meta_i;
+
+assign epoch = epoch_reg;
+
+wire        meta_write_en = invalidate_en || fill_en;
+wire [10:0] meta_write_addr = invalidate_en ? invalidate_addr : fill_addr;
+wire [20:0] meta_write_data = invalidate_en ? 21'b0 : {epoch_reg, fill_tag};
+
+always @(posedge clk) begin
+    if (reset) begin
+        epoch_reg <= (epoch_reg == 2'd3) ? 2'd1 : epoch_reg + 2'd1;
+    end
+end
+
+always @(posedge clk) begin
+    if (read_en) begin
+        {read_epoch, read_tag} <= meta_mem[read_addr];
+    end
+    if (meta_write_en) begin
+        meta_mem[meta_write_addr] <= meta_write_data;
+    end
+end
+
+initial begin
+    for (meta_i = 0; meta_i < 2048; meta_i = meta_i + 1) begin
+        meta_mem[meta_i] = 21'b0;
+    end
+end
+
+endmodule
+
+module dcache_data_ram (
+    input  wire        clk,
+    input  wire        read_en,
+    input  wire [9:0]  read_addr,
+    output reg  [31:0] read_data,
+    input  wire        write_en,
+    input  wire [9:0]  write_addr,
+    input  wire [31:0] write_data
+);
+
+(* ram_style = "block" *) reg [31:0] mem [0:1023];
+
+always @(posedge clk) begin
+    if (read_en) begin
+        read_data <= mem[read_addr];
+    end
+    if (write_en) begin
+        mem[write_addr] <= write_data;
+    end
+end
+
+endmodule
+
+module icache_data_ram (
+    input  wire        clk,
+    input  wire        read_en,
+    input  wire [10:0] read_addr,
+    output reg  [31:0] read_data,
+    input  wire        write_en,
+    input  wire [10:0] write_addr,
+    input  wire [31:0] write_data
+);
+
+(* ram_style = "block" *) reg [31:0] mem [0:2047];
 
 always @(posedge clk) begin
     if (read_en) begin
