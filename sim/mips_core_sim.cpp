@@ -142,6 +142,8 @@ struct PerfStats {
     uint64_t bus_if_cycles = 0;
     uint64_t bus_mem_cycles = 0;
     uint64_t bus_dcpf_cycles = 0;
+    uint64_t bus_dcfl_cycles = 0;
+    uint64_t bus_dcev_cycles = 0;
     uint64_t mem_wait_cycles = 0;
     uint64_t mmio_or_base_loads = 0;
     uint64_t mem_stall_cycles = 0;
@@ -180,10 +182,12 @@ void print_perf_stats(const PerfStats& stats) {
                 static_cast<unsigned long long>(stats.dcache_load_misses),
                 static_cast<unsigned long long>(stats.dcache_prefetches),
                 static_cast<unsigned long long>(stats.dcache_prefetch_wait_cycles));
-    std::printf("perf-stats bus if=%llu mem=%llu dcpf=%llu\n",
+    std::printf("perf-stats bus if=%llu mem=%llu dcpf=%llu dcfl=%llu dcev=%llu\n",
                 static_cast<unsigned long long>(stats.bus_if_cycles),
                 static_cast<unsigned long long>(stats.bus_mem_cycles),
-                static_cast<unsigned long long>(stats.bus_dcpf_cycles));
+                static_cast<unsigned long long>(stats.bus_dcpf_cycles),
+                static_cast<unsigned long long>(stats.bus_dcfl_cycles),
+                static_cast<unsigned long long>(stats.bus_dcev_cycles));
     std::printf("perf-stats memory stores=%llu mem_wait=%llu mmio_or_base_loads=%llu\n",
                 static_cast<unsigned long long>(stats.stores),
                 static_cast<unsigned long long>(stats.mem_wait_cycles),
@@ -387,6 +391,10 @@ int main(int argc, char** argv) {
                     ++perf_stats.bus_mem_cycles;
                 } else if (dut.debug_bus_owner == 3) {
                     ++perf_stats.bus_dcpf_cycles;
+                } else if (dut.debug_bus_owner == 4) {
+                    ++perf_stats.bus_dcfl_cycles;
+                } else if (dut.debug_bus_owner == 5) {
+                    ++perf_stats.bus_dcev_cycles;
                 }
                 if (!dut.bus_ready) {
                     if (dut.debug_bus_owner == 1) {

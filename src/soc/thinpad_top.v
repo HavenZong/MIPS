@@ -58,7 +58,7 @@ cpu_clk_55m u_cpu_clk (
     .locked(clk_locked)
 );
 
-localparam RESET_HOLD_CYCLES = 23'd5_500_000; // 100 ms at 55 MHz.
+localparam RESET_HOLD_CYCLES = 23'd5_625_000; // 100 ms at 56.25 MHz.
 reg reset_sync_0 = 1'b1;
 reg reset_sync_1 = 1'b1;
 reg [22:0] reset_hold_count = 23'b0;
@@ -116,7 +116,7 @@ mips_core #(
 );
 
 soc_bus #(
-    .CLK_FREQ(55000000),
+    .CLK_FREQ(56250000),
     .UART_BAUD(9600)
 ) u_bus (
     .clk(clk),
@@ -189,7 +189,7 @@ assign locked = !reset;
 MMCME2_BASE #(
     .BANDWIDTH("OPTIMIZED"),
     .CLKIN1_PERIOD(20.000),
-    .CLKFBOUT_MULT_F(22.000),
+    .CLKFBOUT_MULT_F(22.500),
     .CLKFBOUT_PHASE(0.000),
     .DIVCLK_DIVIDE(1),
     .CLKOUT0_DIVIDE_F(20.000),

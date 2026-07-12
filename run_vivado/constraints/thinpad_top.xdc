@@ -5,8 +5,8 @@ set_property CLOCK_DEDICATED_ROUTE FALSE [get_nets clk_11M0592_IBUF]
 
 create_clock -period 20.000 -name clk_50M -waveform {0.000 10.000} [get_ports clk_50M]
 create_clock -period 90.422 -name clk_11M0592 -waveform {0.000 45.211} [get_ports clk_11M0592]
-create_generated_clock -name clk_cpu_55M -source [get_pins u_cpu_clk/u_mmcm/CLKIN1] \
-    -divide_by 10 -multiply_by 11 [get_pins u_cpu_clk/u_clk_buf/O]
+create_generated_clock -name clk_cpu_56M25 -source [get_pins u_cpu_clk/u_mmcm/CLKIN1] \
+    -divide_by 8 -multiply_by 9 [get_pins u_cpu_clk/u_clk_buf/O]
 
 #Touch Button
 set_property -dict {PACKAGE_PIN T2 IOSTANDARD LVCMOS33} [get_ports touch_btn[0]] ;#BTN1
