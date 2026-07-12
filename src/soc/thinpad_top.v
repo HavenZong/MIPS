@@ -48,8 +48,17 @@ module thinpad_top(
     output wire video_de
 );
 
-wire clk = clk_50M;
-localparam RESET_HOLD_CYCLES = 23'd5_000_000; // 100 ms at 50 MHz.
+wire clk;
+wire clk_locked;
+
+cpu_clk_55m u_cpu_clk (
+    .clk_in(clk_50M),
+    .reset(reset_btn),
+    .clk_out(clk),
+    .locked(clk_locked)
+);
+
+localparam RESET_HOLD_CYCLES = 23'd5_500_000; // 100 ms at 55 MHz.
 reg reset_sync_0 = 1'b1;
 reg reset_sync_1 = 1'b1;
 reg [22:0] reset_hold_count = 23'b0;
@@ -71,7 +80,7 @@ always @(posedge clk) begin
     end
 end
 
-wire reset = reset_sync_1 || reset_hold;
+wire reset = !clk_locked || reset_sync_1 || reset_hold;
 
 wire        cpu_bus_valid;
 wire        cpu_bus_write;
@@ -107,7 +116,7 @@ mips_core #(
 );
 
 soc_bus #(
-    .CLK_FREQ(50000000),
+    .CLK_FREQ(55000000),
     .UART_BAUD(9600)
 ) u_bus (
     .clk(clk),
@@ -159,6 +168,58 @@ wire unused_inputs = clk_11M0592 ^ clock_btn ^ |touch_btn ^ |dip_sw ^
                      ^debug_wb_pc ^ debug_wb_rf_wnum[4] ^
                      ^debug_wb_rf_wdata[31:4] ^ ^debug_pc[31:18] ^ ^debug_pc[1:0];
 assign video_de = unused_inputs & 1'b0;
+
+endmodule
+
+module cpu_clk_55m(
+    input wire clk_in,
+    input wire reset,
+    output wire clk_out,
+    output wire locked
+);
+
+wire clk_fb;
+wire clk_fb_buf;
+wire clk_mmcm;
+
+`ifdef SIMULATION
+assign clk_out = clk_in;
+assign locked = !reset;
+`else
+MMCME2_BASE #(
+    .BANDWIDTH("OPTIMIZED"),
+    .CLKIN1_PERIOD(20.000),
+    .CLKFBOUT_MULT_F(22.000),
+    .CLKFBOUT_PHASE(0.000),
+    .DIVCLK_DIVIDE(1),
+    .CLKOUT0_DIVIDE_F(20.000),
+    .CLKOUT0_PHASE(0.000),
+    .CLKOUT0_DUTY_CYCLE(0.500),
+    .STARTUP_WAIT("FALSE")
+) u_mmcm (
+    .CLKIN1(clk_in),
+    .CLKFBIN(clk_fb_buf),
+    .RST(reset),
+    .PWRDWN(1'b0),
+    .CLKFBOUT(clk_fb),
+    .CLKFBOUTB(),
+    .CLKOUT0(clk_mmcm),
+    .CLKOUT0B(),
+    .CLKOUT1(),
+    .CLKOUT1B(),
+    .CLKOUT2(),
+    .CLKOUT2B(),
+    .CLKOUT3(),
+    .CLKOUT3B(),
+    .CLKOUT4(),
+    .CLKOUT5(),
+    .CLKOUT6(),
+    .LOCKED(locked)
+);
+
+BUFG u_fb_buf(.I(clk_fb), .O(clk_fb_buf));
+BUFG u_clk_buf(.I(clk_mmcm), .O(clk_out));
+`endif
 
 endmodule
 
